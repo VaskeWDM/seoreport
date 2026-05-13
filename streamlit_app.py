@@ -1,1109 +1,978 @@
 import csv
-import html
 import io
 import math
 import re
 from pathlib import Path
-from typing import Iterable, List, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urljoin
 
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 
 # =============================================================================
-# CONFIG
+# Page setup
 # =============================================================================
 st.set_page_config(
-    page_title="Local SEO Action Dashboard",
+    page_title="Local SEO Report",
     page_icon="📍",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-DEFAULT_BRAND_TERMS = "fozzy, fozzys, fozzy's, fozzies"
-DEFAULT_NOISE_TERMS = (
-    "fuzzy, fuzzies, foxys, foxy, foxiis, weezy, boozies, suzy, "
-    "ozzy, fitzy, cedarvale, harvey wallbangers, applebee, backyard grill, "
-    "ambiance, spikes, nunzio"
+st.markdown(
+    """
+    <style>
+        :root {
+            --blue: #214f7d;
+            --blue-2: #173e63;
+            --bg: #f3f6fb;
+            --card: #ffffff;
+            --muted: #667085;
+            --line: #e4e9f2;
+            --good: #12805c;
+            --warn: #b54708;
+            --bad: #b42318;
+        }
+
+        .stApp {
+            background: var(--bg);
+        }
+
+        [data-testid="stSidebar"] {
+            background: #ffffff;
+            border-right: 1px solid var(--line);
+        }
+
+        .hero {
+            background: linear-gradient(135deg, #173e63 0%, #245c91 100%);
+            color: white;
+            padding: 28px 30px;
+            border-radius: 22px;
+            margin-bottom: 18px;
+            box-shadow: 0 14px 35px rgba(23, 62, 99, .16);
+        }
+
+        .hero h1 {
+            font-size: 34px;
+            line-height: 1.05;
+            margin: 0 0 8px 0;
+            font-weight: 800;
+        }
+
+        .hero p {
+            color: rgba(255,255,255,.84);
+            font-size: 16px;
+            margin: 0;
+            max-width: 980px;
+        }
+
+        .section-title {
+            margin: 28px 0 8px 0;
+            color: #101828;
+            font-size: 23px;
+            font-weight: 800;
+            letter-spacing: -0.01em;
+        }
+
+        .section-help {
+            color: var(--muted);
+            margin-top: -4px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+
+        div[data-testid="stMetric"] {
+            background: #ffffff;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            padding: 16px 18px;
+            box-shadow: 0 10px 22px rgba(16, 24, 40, .045);
+        }
+
+        div[data-testid="stMetric"] label {
+            color: var(--muted) !important;
+        }
+
+        .action-card {
+            background: #ffffff;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            padding: 18px 20px;
+            margin-bottom: 12px;
+            box-shadow: 0 10px 22px rgba(16, 24, 40, .045);
+        }
+
+        .action-card .topline {
+            display: flex;
+            justify-content: space-between;
+            gap: 14px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .action-card h3 {
+            margin: 0;
+            color: #101828;
+            font-size: 18px;
+            line-height: 1.25;
+        }
+
+        .action-card p {
+            color: #475467;
+            margin: 6px 0 0 0;
+            font-size: 14px;
+        }
+
+        .pill {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-size: 12px;
+            font-weight: 750;
+            white-space: nowrap;
+            border: 1px solid transparent;
+        }
+
+        .pill-blue { background:#e8f2fd; color:#184e7e; border-color:#cbe3fb; }
+        .pill-green { background:#eafaf4; color:#067647; border-color:#c8f1df; }
+        .pill-orange { background:#fff4e5; color:#b54708; border-color:#fedf89; }
+        .pill-red { background:#fef3f2; color:#b42318; border-color:#fecdca; }
+        .pill-gray { background:#f2f4f7; color:#344054; border-color:#e4e7ec; }
+
+        .page-card {
+            background: #ffffff;
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 22px rgba(16, 24, 40, .045);
+            margin-bottom: 18px;
+        }
+
+        .page-card-header {
+            background: var(--blue);
+            color: white;
+            padding: 14px 18px;
+            display: flex;
+            justify-content: space-between;
+            gap: 14px;
+            align-items: center;
+        }
+
+        .page-card-header .name {
+            font-weight: 800;
+            font-size: 16px;
+            line-height: 1.2;
+        }
+
+        .page-card-body {
+            padding: 18px;
+        }
+
+        .url-line {
+            color: #667085;
+            font-size: 13px;
+            margin-bottom: 8px;
+            word-break: break-all;
+        }
+
+        .meta-title {
+            color: #173e63;
+            font-weight: 800;
+            font-size: 17px;
+            margin-bottom: 6px;
+        }
+
+        .desc {
+            color: #344054;
+            font-size: 14px;
+            line-height: 1.45;
+            margin-bottom: 12px;
+        }
+
+        .mini-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .mini-box {
+            border: 1px solid var(--line);
+            background: #f8fafc;
+            border-radius: 14px;
+            padding: 10px 12px;
+        }
+
+        .mini-label {
+            color: #667085;
+            font-size: 12px;
+            margin-bottom: 3px;
+        }
+
+        .mini-value {
+            color: #101828;
+            font-size: 16px;
+            font-weight: 800;
+        }
+
+        .small-note {
+            color: #667085;
+            font-size: 13px;
+        }
+
+        .clean-table-title {
+            color: #101828;
+            font-weight: 800;
+            margin: 16px 0 8px 0;
+        }
+
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+        }
+
+        .stTabs [data-baseweb="tab"] {
+            background: #ffffff;
+            border-radius: 999px;
+            padding: 10px 16px;
+            border: 1px solid var(--line);
+        }
+
+        .stTabs [aria-selected="true"] {
+            background: #e8f2fd !important;
+            color: #184e7e !important;
+            border-color: #cbe3fb !important;
+        }
+
+        @media (max-width: 900px) {
+            .mini-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .hero h1 { font-size: 27px; }
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
-CSS = """
-<style>
-    .block-container { padding-top: 1.25rem; padding-bottom: 4rem; }
-    div[data-testid="stMetric"] {
-        background: linear-gradient(180deg, rgba(25,31,48,.98), rgba(16,20,31,.98));
-        border: 1px solid rgba(150, 170, 255, .18);
-        border-radius: 16px;
-        padding: 16px 16px 12px 16px;
-        box-shadow: 0 10px 28px rgba(0,0,0,.16);
-    }
-    div[data-testid="stMetric"] label { color: #AAB4D4 !important; }
-    .hero {
-        padding: 24px 26px;
-        border-radius: 22px;
-        background: linear-gradient(135deg, rgba(48,104,255,.20), rgba(87,220,180,.09));
-        border: 1px solid rgba(160, 180, 255, .20);
-        margin-bottom: 18px;
-    }
-    .hero h1 { margin: 0; font-size: 2.1rem; letter-spacing: -.035em; }
-    .hero p { margin: .45rem 0 0 0; color: #B9C3DA; font-size: 1.02rem; max-width: 980px; }
-    .section-title {
-        font-size: 1.32rem;
-        font-weight: 800;
-        letter-spacing: -.015em;
-        margin-top: 2rem;
-        margin-bottom: .35rem;
-    }
-    .plain-card {
-        border: 1px solid rgba(160, 180, 255, .17);
-        border-radius: 18px;
-        padding: 17px 18px;
-        background: rgba(255,255,255,.035);
-        min-height: 132px;
-    }
-    .plain-card h3 { margin-top: 0; font-size: 1.02rem; }
-    .plain-card p { color: #BCC7E0; margin-bottom: 0; }
-    .answer-box {
-        border-left: 4px solid rgba(100, 190, 255, .92);
-        padding: 10px 14px;
-        border-radius: 10px;
-        background: rgba(100, 190, 255, .07);
-        color: #D8E4FF;
-        margin: .5rem 0 1rem 0;
-    }
-    .small-muted { color: #9CA8C4; font-size: .9rem; }
-    .stDownloadButton button, .stButton button {
-        border-radius: 12px !important;
-        font-weight: 650 !important;
-    }
-</style>
-"""
-st.markdown(CSS, unsafe_allow_html=True)
-
 
 # =============================================================================
-# LOCAL FILE DISCOVERY
+# Helpers
 # =============================================================================
-def app_directory() -> Path:
-    """Return the folder where this Streamlit script lives."""
-    try:
-        return Path(__file__).resolve().parent
-    except NameError:
-        return Path.cwd().resolve()
-
-
-def list_csv_files(folder: str, recursive: bool = False) -> List[Path]:
-    """List CSV files from a server-side folder for local Streamlit use."""
-    if not folder:
-        return []
-
-    root = Path(folder).expanduser()
-    if not root.exists() or not root.is_dir():
-        return []
-
-    pattern = "**/*.csv" if recursive else "*.csv"
-    files = [p for p in root.glob(pattern) if p.is_file()]
-    return sorted(files, key=lambda p: (p.name.lower(), str(p.parent).lower()))[:500]
-
-
-def read_local_csv_bytes(path: Path) -> bytes:
-    return path.read_bytes()
-
-
-def path_label(path: Path, root: Path) -> str:
-    try:
-        return str(path.relative_to(root))
-    except ValueError:
-        return path.name
-
-
-# =============================================================================
-# PARSING
-# =============================================================================
-def _clean_number(value) -> float:
-    """Clean spreadsheet-style numbers such as =\"40500\" and return a float."""
-    if value is None:
-        return 0.0
-    s = str(value).strip()
-    s = s.replace('="', "").replace('"', "")
-    s = s.replace(",", "").replace("$", "")
-    if s in {"", "-", "—", "nan", "None"}:
-        return 0.0
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
-
-
-def _safe_text(value) -> str:
+def clean_cell(value):
     if value is None:
         return ""
-    return html.unescape(str(value)).strip()
+    value = str(value).replace("&amp;", "&").strip()
+    if value.startswith('="') and value.endswith('"'):
+        value = value[2:-1]
+    value = value.replace('="', '').replace('"', '').replace('=', '').strip()
+    return value
+
+
+def to_int(value):
+    text = clean_cell(value).replace(',', '').replace('$', '')
+    try:
+        return int(float(text))
+    except Exception:
+        return 0
+
+
+def to_float(value):
+    text = clean_cell(value).replace(',', '').replace('$', '')
+    try:
+        return float(text)
+    except Exception:
+        return 0.0
+
+
+def compact_number(value):
+    value = float(value or 0)
+    if value >= 1_000_000:
+        return f"{value/1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"{value/1_000:.1f}k"
+    return f"{value:,.0f}"
+
+
+def short_text(value, limit=165):
+    value = clean_cell(value)
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
+def slug_label(url, title, group):
+    if clean_cell(group):
+        label = clean_cell(group)
+    elif clean_cell(title):
+        label = clean_cell(title)
+    elif clean_cell(url):
+        label = clean_cell(url)
+    else:
+        label = "Untitled page"
+    label = re.sub(r"\s+", " ", label).strip()
+    return short_text(label, 72)
+
+
+def parse_base_url(project_name):
+    match = re.search(r"https?://[^\s,]+", project_name or "")
+    if match:
+        return match.group(0).rstrip('/') + '/'
+    return ""
+
+
+def full_url(base_url, url):
+    url = clean_cell(url)
+    if not url:
+        return ""
+    if url.startswith('http://') or url.startswith('https://'):
+        return url
+    if base_url:
+        return urljoin(base_url, url)
+    return url
+
+
+def contains_any(text, terms):
+    text = f" {str(text).lower()} "
+    return any(term.strip().lower() and term.strip().lower() in text for term in terms)
+
+
+def token_set(text):
+    return {t for t in re.findall(r"[a-z0-9']+", str(text).lower()) if len(t) > 2}
+
+
+def is_kw_aligned(row):
+    keyword = str(row.get('Keyword', '')).lower()
+    title = str(row.get('Title', '')).lower()
+    h1 = str(row.get('H1', '')).lower()
+    url = str(row.get('URL', '')).lower().replace('-', ' ').replace('/', ' ')
+    desc = str(row.get('Description', '')).lower()
+
+    explicit_title = str(row.get('inTitle', '')).strip().lower() not in {'', '0', 'no', 'false', 'none', '-'}
+    explicit_url = str(row.get('inURL', '')).strip().lower() not in {'', '0', 'no', 'false', 'none', '-'}
+    if explicit_title or explicit_url:
+        return True
+
+    if keyword and (keyword in title or keyword in h1 or keyword in url or keyword in desc):
+        return True
+
+    kw_tokens = token_set(keyword)
+    page_tokens = token_set(" ".join([title, h1, url, desc]))
+    if not kw_tokens:
+        return False
+
+    # For longer phrases, matching the important words is enough to say the page is directionally aligned.
+    overlap = len(kw_tokens & page_tokens) / max(len(kw_tokens), 1)
+    return overlap >= 0.55
+
+
+def length_status(kind, length):
+    if kind == 'title':
+        if length < 25:
+            return 'Too short', 'pill-orange'
+        if length > 65:
+            return 'Too long', 'pill-orange'
+        return 'Good', 'pill-green'
+    if length < 70:
+        return 'Too short', 'pill-orange'
+    if length > 165:
+        return 'Too long', 'pill-orange'
+    return 'Good', 'pill-green'
 
 
 @st.cache_data(show_spinner=False)
-def parse_audit_csv(file_bytes: bytes) -> Tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """
-    Parse the sectioned SEO audit CSV format:
-    Group,Title,URL,DESC,H1
-    <page row>
-    Keyword,Volume,CPC,inTITLE,inURL,...
-    <keyword rows>
+def parse_audit_csv(raw_bytes):
+    if hasattr(raw_bytes, 'getvalue'):
+        raw_bytes = raw_bytes.getvalue()
+    if isinstance(raw_bytes, str):
+        raw_bytes = raw_bytes.encode('utf-8')
 
-    Also supports a fallback flat CSV with Keyword, Volume, CPC and URL-like columns.
-    """
-    content = file_bytes.decode("utf-8-sig", errors="replace")
-    reader = csv.reader(io.StringIO(content))
-    rows = list(reader)
+    text = raw_bytes.decode('utf-8-sig', errors='replace')
+    rows = list(csv.reader(io.StringIO(text)))
 
-    meta = {}
-    groups = []
-    current = None
-    state = None
+    project_name = ""
+    pages = []
+    keywords = []
+    current_page = None
+    reading_keywords = False
+    page_id = 0
 
     for row in rows:
-        if not row or not any(str(cell).strip() for cell in row):
+        row = [clean_cell(c) for c in row]
+        if not row or not any(row):
+            reading_keywords = False
             continue
 
-        first = str(row[0]).strip()
+        first = row[0]
+        lower_first = first.lower()
 
-        if first in {"Project Name", "Total Groups"} and len(row) > 1:
-            meta[first] = _safe_text(row[1])
+        if lower_first == 'project name' and len(row) > 1:
+            project_name = row[1]
             continue
 
-        if first == "Group":
-            if current:
-                groups.append(current)
-            current = None
-            state = "group_data"
+        if lower_first == 'group':
+            current_page = None
+            reading_keywords = False
             continue
 
-        if state == "group_data":
-            current = {
-                "group_name": _safe_text(row[0]) if len(row) > 0 else "",
-                "title": _safe_text(row[1]) if len(row) > 1 else "",
-                "url": _safe_text(row[2]) if len(row) > 2 else "",
-                "meta_description": _safe_text(row[3]) if len(row) > 3 else "",
-                "h1": _safe_text(row[4]) if len(row) > 4 else "",
-                "keywords": [],
+        # Group data row usually follows a "Group,Title,URL,DESC,H1" header.
+        if not reading_keywords and len(row) >= 5 and row[2].startswith('/') or (not reading_keywords and len(row) >= 5 and row[2].startswith('http')):
+            page_id += 1
+            current_page = {
+                'Page ID': page_id,
+                'Group': row[0],
+                'Title': row[1],
+                'URL': row[2],
+                'Description': row[3] if len(row) > 3 else '',
+                'H1': row[4] if len(row) > 4 else '',
             }
-            state = "after_group"
+            pages.append(current_page)
             continue
 
-        if first == "Keyword" and current:
-            state = "keywords"
+        if lower_first == 'keyword':
+            reading_keywords = True
             continue
 
-        if state == "keywords" and current:
-            kw = _safe_text(row[0])
-            if not kw:
+        if reading_keywords and current_page:
+            keyword = first
+            if not keyword:
                 continue
-            current["keywords"].append(
+            keywords.append(
                 {
-                    "keyword": kw,
-                    "volume": int(_clean_number(row[1] if len(row) > 1 else 0)),
-                    "cpc": float(_clean_number(row[2] if len(row) > 2 else 0)),
-                    "source_in_title": _safe_text(row[3] if len(row) > 3 else ""),
-                    "source_in_url": _safe_text(row[4] if len(row) > 4 else ""),
+                    'Page ID': current_page['Page ID'],
+                    'Group': current_page['Group'],
+                    'Title': current_page['Title'],
+                    'URL': current_page['URL'],
+                    'Description': current_page['Description'],
+                    'H1': current_page['H1'],
+                    'Keyword': keyword,
+                    'Volume': to_int(row[1]) if len(row) > 1 else 0,
+                    'CPC': to_float(row[2]) if len(row) > 2 else 0.0,
+                    'inTitle': row[3] if len(row) > 3 else '',
+                    'inURL': row[4] if len(row) > 4 else '',
+                    'Rank': row[5] if len(row) > 5 else '',
                 }
             )
 
-    if current:
-        groups.append(current)
+    pages_df = pd.DataFrame(pages)
+    keywords_df = pd.DataFrame(keywords)
+    return project_name, pages_df, keywords_df
 
-    keyword_rows = []
-    page_rows = []
-    for g in groups:
-        page_rows.append(
+
+def classify_need(keyword, brand_terms):
+    kw = str(keyword).lower()
+    if contains_any(kw, brand_terms):
+        return 'Brand name searches'
+    if any(t in kw for t in ['menu', 'special', 'happy hour', 'price', 'prices', 'drink', 'food', 'burger', 'pizza', 'sandwich', 'fish fry', 'wings', 'beer', 'brunch', 'lunch', 'dinner']):
+        return 'Menu, food & specials'
+    if any(t in kw for t in ['near me', 'nearby', 'loves park', 'rockford', 'machesney', 'restaurant', 'restaurants', 'bar', 'bars', 'pub', 'grill']):
+        return 'Nearby restaurants & bars'
+    if any(t in kw for t in ['event', 'events', 'party', 'parties', 'catering', 'private', 'banquet', 'room', 'birthday', 'rehearsal']):
+        return 'Events & private parties'
+    if any(t in kw for t in ['hour', 'hours', 'open', 'closed', 'address', 'phone', 'contact', 'directions', 'location']):
+        return 'Hours, contact & location'
+    if any(t in kw for t in ['review', 'reviews', 'photo', 'photos', 'pictures']):
+        return 'Reviews & photos'
+    return 'Other searches'
+
+
+def recommend_keyword_action(row):
+    if row.get('Is noise', False):
+        return 'Ignore or review manually'
+    if row.get('Is brand', False):
+        return 'Protect brand page'
+    need = row.get('Customer need', '')
+    if not row.get('Aligned', False):
+        if need == 'Menu, food & specials':
+            return 'Improve menu page'
+        if need == 'Nearby restaurants & bars':
+            return 'Add local wording to page'
+        if need == 'Events & private parties':
+            return 'Build event/private party section'
+        if need == 'Hours, contact & location':
+            return 'Fix contact/hours info'
+        return 'Add this topic to page'
+    return 'Keep / monitor'
+
+
+def make_enriched_keywords(keywords_df, brand_terms, noise_terms):
+    if keywords_df.empty:
+        return keywords_df.copy()
+
+    df = keywords_df.copy()
+    df['Keyword lower'] = df['Keyword'].astype(str).str.lower()
+    df['Is brand'] = df['Keyword lower'].apply(lambda x: contains_any(x, brand_terms))
+    df['Is noise'] = df['Keyword lower'].apply(lambda x: contains_any(x, noise_terms))
+    df['Customer need'] = df['Keyword'].apply(lambda x: classify_need(x, brand_terms))
+    df['Aligned'] = df.apply(is_kw_aligned, axis=1)
+
+    # A plain, directional score. Not meant to look scientific — just to sort work sensibly.
+    df['Opportunity score'] = (
+        df['Volume'].clip(lower=0).apply(lambda x: math.sqrt(x))
+        * (1 + df['CPC'].clip(lower=0).clip(upper=5) / 5)
+        * df['Aligned'].apply(lambda x: 0.6 if x else 1.35)
+        * df['Is brand'].apply(lambda x: 0.55 if x else 1.0)
+        * df['Is noise'].apply(lambda x: 0.05 if x else 1.0)
+    ).round(2)
+    df['Recommendation'] = df.apply(recommend_keyword_action, axis=1)
+    df['Page'] = df.apply(lambda r: slug_label(r['URL'], r['Title'], r['Group']), axis=1)
+    return df
+
+
+def make_page_summary(pages_df, kw_df):
+    if pages_df.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, p in pages_df.iterrows():
+        kws = kw_df[kw_df['Page ID'] == p['Page ID']].copy() if not kw_df.empty else pd.DataFrame()
+        clean = kws[~kws.get('Is noise', False)] if not kws.empty else kws
+        growth = clean[~clean.get('Is brand', False)] if not clean.empty else clean
+        missed = growth[~growth.get('Aligned', False)] if not growth.empty else growth
+
+        title_len = len(str(p.get('Title', '')))
+        desc_len = len(str(p.get('Description', '')))
+        title_state, _ = length_status('title', title_len)
+        desc_state, _ = length_status('desc', desc_len)
+
+        rows.append(
             {
-                "url": g["url"],
-                "title": g["title"],
-                "h1": g["h1"],
-                "meta_description": g["meta_description"],
-                "group_name": g["group_name"],
+                'Page ID': p['Page ID'],
+                'Page': slug_label(p.get('URL'), p.get('Title'), p.get('Group')),
+                'URL': p.get('URL', ''),
+                'Title': p.get('Title', ''),
+                'H1': p.get('H1', ''),
+                'Description': p.get('Description', ''),
+                'Useful volume': int(clean['Volume'].sum()) if not clean.empty else 0,
+                'Growth volume': int(growth['Volume'].sum()) if not growth.empty else 0,
+                'Missed volume': int(missed['Volume'].sum()) if not missed.empty else 0,
+                'Keywords': int(len(kws)),
+                'Useful keywords': int(len(clean)),
+                'Needs title work': title_state != 'Good',
+                'Needs description work': desc_state != 'Good',
+                'Title length': title_len,
+                'Meta description length': desc_len,
+                'Attention score': int((missed['Volume'].sum() if not missed.empty else 0) + (200 if title_state != 'Good' else 0) + (150 if desc_state != 'Good' else 0)),
             }
         )
-        for kw in g["keywords"]:
-            keyword_rows.append(
-                {
-                    "url": g["url"],
-                    "page_title": g["title"],
-                    "h1": g["h1"],
-                    "meta_description": g["meta_description"],
-                    "group_name": g["group_name"],
-                    **kw,
-                }
-            )
+    return pd.DataFrame(rows).sort_values(['Attention score', 'Growth volume'], ascending=False)
 
-    if keyword_rows:
-        keywords = pd.DataFrame(keyword_rows)
-        pages = pd.DataFrame(page_rows).drop_duplicates("url")
-        return keywords, pages, meta
 
-    # Fallback for ordinary flat CSVs.
-    flat = pd.read_csv(io.StringIO(content))
-    cols = {c.lower().strip(): c for c in flat.columns}
-    kw_col = cols.get("keyword") or cols.get("query") or cols.get("term")
-    vol_col = cols.get("volume") or cols.get("search volume") or cols.get("monthly volume")
-    cpc_col = cols.get("cpc") or cols.get("cost per click")
-    url_col = cols.get("url") or cols.get("page url") or cols.get("page")
+def action_summary(kw_df, page_df):
+    items = []
+    if kw_df.empty:
+        return items
 
-    if not kw_col:
-        raise ValueError("Could not find a keyword column. Expected a sectioned audit CSV or a flat CSV with a Keyword column.")
+    useful = kw_df[~kw_df['Is noise']]
+    growth = useful[~useful['Is brand']]
+    missed = growth[~growth['Aligned']]
 
-    keywords = pd.DataFrame(
-        {
-            "url": flat[url_col].astype(str) if url_col else "",
-            "page_title": "",
-            "h1": "",
-            "meta_description": "",
-            "group_name": "",
-            "keyword": flat[kw_col].astype(str),
-            "volume": flat[vol_col].map(_clean_number).astype(int) if vol_col else 0,
-            "cpc": flat[cpc_col].map(_clean_number).astype(float) if cpc_col else 0.0,
-            "source_in_title": "",
-            "source_in_url": "",
-        }
+    if not page_df.empty:
+        top_page = page_df.sort_values('Attention score', ascending=False).iloc[0]
+        if top_page['Attention score'] > 0:
+            items.append({
+                'title': f"Fix this page first: {top_page['Page']}",
+                'pill': f"{compact_number(top_page['Missed volume'])} missed searches/mo",
+                'pill_class': 'pill-orange',
+                'body': "This page has the biggest gap between what people search and what the page clearly talks about. Start with the title, H1, opening copy, and meta description.",
+            })
+
+    if not missed.empty:
+        top_kw = missed.sort_values(['Volume', 'CPC'], ascending=False).iloc[0]
+        items.append({
+            'title': f"Add this phrase clearly: “{top_kw['Keyword']}”",
+            'pill': f"{compact_number(top_kw['Volume'])}/mo",
+            'pill_class': 'pill-blue',
+            'body': f"The keyword is assigned to {top_kw['Page']}, but the page does not clearly match it. Add natural wording, not keyword stuffing.",
+        })
+
+    if not useful[useful['Is brand']].empty:
+        brand_vol = int(useful[useful['Is brand']]['Volume'].sum())
+        items.append({
+            'title': "Protect your brand searches",
+            'pill': f"{compact_number(brand_vol)}/mo",
+            'pill_class': 'pill-green',
+            'body': "Make sure the homepage, menu page, contact page, hours, photos, and reviews are clean. These people are already looking for you.",
+        })
+
+    noise = kw_df[kw_df['Is noise']]
+    if not noise.empty:
+        items.append({
+            'title': "Do not chase every keyword in the export",
+            'pill': f"{len(noise):,} noisy terms",
+            'pill_class': 'pill-gray',
+            'body': "Some terms appear to be competitors, misspellings, or unrelated places. Keep them out of the main plan unless you confirm they really matter.",
+        })
+
+    if len(items) < 4 and not growth.empty:
+        top_need = growth.groupby('Customer need', as_index=False)['Volume'].sum().sort_values('Volume', ascending=False).iloc[0]
+        items.append({
+            'title': f"Lean into: {top_need['Customer need']}",
+            'pill': f"{compact_number(top_need['Volume'])}/mo",
+            'pill_class': 'pill-blue',
+            'body': "This is the biggest non-brand demand bucket. Make sure your site has one strong page or section that answers it clearly.",
+        })
+
+    return items[:4]
+
+
+def render_action_card(item):
+    st.markdown(
+        f"""
+        <div class="action-card">
+            <div class="topline">
+                <h3>{item['title']}</h3>
+                <span class="pill {item['pill_class']}">{item['pill']}</span>
+            </div>
+            <p>{item['body']}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    pages = (
-        keywords[["url", "page_title", "h1", "meta_description", "group_name"]]
-        .rename(columns={"page_title": "title"})
-        .drop_duplicates("url")
+
+
+def find_csvs(folder, recursive=False):
+    path = Path(folder).expanduser()
+    if not path.exists() or not path.is_dir():
+        return []
+    pattern = '**/*.csv' if recursive else '*.csv'
+    files = sorted(path.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    return files
+
+
+def read_chosen_file():
+    st.sidebar.header("CSV file")
+    source = st.sidebar.radio(
+        "Choose source",
+        ["Upload CSV", "Open CSV from local folder"],
+        horizontal=False,
     )
-    return keywords, pages, meta
+
+    if source == "Upload CSV":
+        uploaded = st.sidebar.file_uploader("Upload audit CSV", type=['csv'])
+        if uploaded:
+            return uploaded.name, uploaded.getvalue()
+        return None, None
+
+    folder = st.sidebar.text_input("Folder path", value=str(Path.cwd()))
+    recursive = st.sidebar.checkbox("Include subfolders", value=False)
+    files = find_csvs(folder, recursive=recursive)
+
+    if not files:
+        st.sidebar.warning("No CSV files found in that folder.")
+        return None, None
+
+    def display_path(p):
+        try:
+            return str(p.relative_to(Path(folder).expanduser()))
+        except Exception:
+            return str(p)
+
+    chosen = st.sidebar.selectbox("Select CSV", files, format_func=display_path)
+    if chosen:
+        return chosen.name, chosen.read_bytes()
+    return None, None
 
 
 # =============================================================================
-# ENRICHMENT
+# Sidebar controls
 # =============================================================================
-def split_terms(raw: str) -> List[str]:
-    return [t.strip().lower() for t in re.split(r"[,;\n]+", raw or "") if t.strip()]
+file_name, raw = read_chosen_file()
 
+st.sidebar.header("Cleanup")
+brand_terms_raw = st.sidebar.text_area(
+    "Brand terms",
+    value="fozzy, fozzy's, fozzys, fozzies, jax, jax pub",
+    help="Keywords containing these terms are treated as people already looking for the business.",
+)
+noise_terms_raw = st.sidebar.text_area(
+    "Competitor / noise terms",
+    value="fuzzy, fuzzy's, foxys, foxy, weezy, boozies, fitzy, nunzio, woody, shazzy, hozy, gozzys, fazzi",
+    help="Terms containing these words are hidden from the main plan by default.",
+)
+brand_terms = [t.strip().lower() for t in brand_terms_raw.split(',') if t.strip()]
+noise_terms = [t.strip().lower() for t in noise_terms_raw.split(',') if t.strip()]
 
-def contains_any(text: str, terms: Iterable[str]) -> bool:
-    value = str(text or "").lower()
-    return any(term and term in value for term in terms)
-
-
-def word_contains_any(text: str, terms: Iterable[str]) -> bool:
-    value = str(text or "").lower()
-    for term in terms:
-        term = term.strip().lower()
-        if not term:
-            continue
-        if " " in term or "'" in term:
-            if term in value:
-                return True
-        elif re.search(rf"\b{re.escape(term)}s?\b", value):
-            return True
-    return False
-
-
-def slugish(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
-
-
-def page_name(url: str) -> str:
-    """Turn a URL into a friendly page label for charts."""
-    url = str(url or "").strip()
-    if not url:
-        return "Unassigned page"
-    parsed = urlparse(url if re.match(r"^https?://", url) else "https://" + url)
-    path = parsed.path.strip("/")
-    if not path:
-        return "Homepage"
-    label = path.split("/")[-1].replace("-", " ").replace("_", " ").strip()
-    return label.title() if label else "Homepage"
-
-
-def intent_bucket(keyword: str) -> str:
-    k = keyword.lower()
-
-    if re.search(r"\b(menu|menus|prices|price|specials?|daily specials?|happy hour|drinks?|beer|cocktail)\b", k):
-        return "Menu / specials"
-    if re.search(r"\b(near me|loves park|rockford|machesney|illinois| il\b|riverside|restaurant|restaurants|bar and grill|bar & grill|sports bar|local bar)\b", k):
-        return "Local discovery"
-    if re.search(r"\b(fish fry|hot dog|hot dogs|sandwich|sandwiches|wings?|burger|pizza|food|apps|appetizers?|tacos?|fries|salad|wrap)\b", k):
-        return "Food item"
-    if re.search(r"\b(event|events|private|party|banquet|catering|live music|music bingo|singo|bingo|band|trivia|karaoke)\b", k):
-        return "Events"
-    if re.search(r"\b(hours|open|closed|photos|photo|pictures|address|phone|contact|directions|reviews?)\b", k):
-        return "Info / navigation"
-    if re.search(r"\b(job|jobs|hiring|apply|application|career|careers)\b", k):
-        return "Hiring"
-    return "Other"
-
-
-def customer_need(row) -> str:
-    """Plain-language bucket a business owner can understand."""
-    if row.get("is_noise", False):
-        return "Bad-fit or competitor searches"
-    if row.get("is_brand", False):
-        return "People searching for us by name"
-
-    intent = row.get("intent", "Other")
-    mapping = {
-        "Menu / specials": "Menu, prices or specials",
-        "Local discovery": "Looking for a place nearby",
-        "Food item": "Specific food or drinks",
-        "Events": "Events, parties or catering",
-        "Info / navigation": "Hours, photos, contact or reviews",
-        "Hiring": "Jobs and hiring",
-        "Other": "Other searches to review",
-    }
-    return mapping.get(intent, "Other searches to review")
-
-
-def owner_action(row) -> str:
-    if row.get("is_noise", False):
-        return "Ignore or exclude"
-    if row.get("is_brand", False):
-        return "Make brand info airtight"
-
-    intent = row.get("intent", "Other")
-    mapping = {
-        "Menu / specials": "Improve menu/specials page",
-        "Local discovery": "Improve homepage/local page",
-        "Food item": "Add food/drink content",
-        "Events": "Add events/private party content",
-        "Info / navigation": "Clean up hours/contact/photos",
-        "Hiring": "Improve hiring page",
-        "Other": "Review keyword manually",
-    }
-    return mapping.get(intent, "Review keyword manually")
-
-
-def work_type(row) -> str:
-    if row.get("is_noise", False):
-        return "Ignore"
-    if row.get("is_brand", False) or row.get("intent") == "Info / navigation":
-        return "Fix existing info"
-    if row.get("intent") in {"Menu / specials", "Local discovery"}:
-        return "Fix existing page"
-    if row.get("intent") in {"Food item", "Events", "Hiring"}:
-        return "Add or expand content"
-    return "Review"
-
-
-def normalize_series(s: pd.Series) -> pd.Series:
-    if s.empty:
-        return s
-    s = s.astype(float).replace([np.inf, -np.inf], np.nan).fillna(0)
-    if s.max() == s.min():
-        return pd.Series(np.where(s.max() > 0, 1.0, 0.0), index=s.index)
-    return (s - s.min()) / (s.max() - s.min())
-
-
-def suggest_title(page_title: str, keyword: str, action: str) -> str:
-    kw = keyword.title()
-    if action == "Improve menu/specials page":
-        return f"{kw} | Fozzy's Bar & Restaurant"
-    if action == "Improve homepage/local page":
-        return f"{kw} | Fozzy's Bar in Loves Park, IL"
-    if action == "Add food/drink content":
-        return f"{kw} in Loves Park & Rockford | Fozzy's"
-    if action == "Add events/private party content":
-        return f"{kw} at Fozzy's | Events in Loves Park"
-    if action == "Make brand info airtight":
-        return page_title if page_title else f"{kw} | Official Fozzy's Bar & Restaurant"
-    return page_title if page_title else f"{kw} | Fozzy's"
-
-
-def suggest_meta(keyword: str, need: str) -> str:
-    kw = keyword.lower()
-    if need == "Menu, prices or specials":
-        return f"Explore Fozzy's {kw}, daily specials, drinks, and local favorites in Loves Park, IL."
-    if need == "Looking for a place nearby":
-        return f"Looking for {kw}? Visit Fozzy's for food, drinks, events, and a lively local bar and restaurant experience."
-    if need == "Specific food or drinks":
-        return f"Craving {kw}? See Fozzy's food options, specials, and reasons locals choose us in Loves Park."
-    if need == "Events, parties or catering":
-        return f"Discover {kw} at Fozzy's, including live entertainment, music bingo, private events, and upcoming specials."
-    if need == "Hours, photos, contact or reviews":
-        return f"Find Fozzy's {kw} details, including location, hours, menu, specials, and contact information."
-    return f"Learn more about {kw} at Fozzy's Bar & Restaurant in Loves Park, IL."
-
-
-def reason_for_row(row) -> str:
-    pieces = []
-    if row["volume"] >= 1000:
-        pieces.append("lots of searches")
-    elif row["volume"] >= 100:
-        pieces.append("meaningful searches")
-    if row["cpc"] >= 1:
-        pieces.append("advertisers pay for this")
-    if row["missing_onpage_signal"]:
-        pieces.append("page does not clearly target it")
-    if row["is_noise"]:
-        pieces.append("probably not your customer")
-    if row["is_brand"]:
-        pieces.append("people already know the business")
-    if not pieces:
-        pieces.append("worth a quick manual check")
-    return ", ".join(pieces)
-
-
-def enrich_keywords(df: pd.DataFrame, pages: pd.DataFrame, brand_terms: List[str], noise_terms: List[str]) -> pd.DataFrame:
-    out = df.copy()
-    out["keyword"] = out["keyword"].fillna("").astype(str)
-    out["kw_lower"] = out["keyword"].str.lower()
-    out["volume"] = pd.to_numeric(out["volume"], errors="coerce").fillna(0).astype(int)
-    out["cpc"] = pd.to_numeric(out["cpc"], errors="coerce").fillna(0.0).astype(float)
-
-    out["intent"] = out["keyword"].map(intent_bucket)
-    out["is_brand"] = out["keyword"].map(lambda x: word_contains_any(x, brand_terms))
-    out["is_noise"] = out.apply(lambda r: (not r["is_brand"]) and word_contains_any(r["keyword"], noise_terms), axis=1)
-
-    out["keyword_in_title"] = out.apply(lambda r: contains_any(r["page_title"], [r["keyword"].lower()]), axis=1)
-    out["keyword_in_h1"] = out.apply(lambda r: contains_any(r["h1"], [r["keyword"].lower()]), axis=1)
-    out["keyword_in_url"] = out.apply(lambda r: contains_any(r["url"], [slugish(r["keyword"])]), axis=1)
-    out["missing_onpage_signal"] = ~(out["keyword_in_title"] | out["keyword_in_h1"] | out["keyword_in_url"])
-
-    vol_score = normalize_series(np.log1p(out["volume"])) * 45
-    cpc_score = normalize_series(np.log1p(out["cpc"])) * 20
-    intent_bonus = out["intent"].map(
-        {
-            "Local discovery": 16,
-            "Menu / specials": 15,
-            "Food item": 13,
-            "Events": 11,
-            "Info / navigation": 8,
-            "Hiring": 5,
-            "Other": 4,
-        }
-    ).fillna(4)
-    gap_bonus = np.where(out["missing_onpage_signal"], 13, 3)
-    brand_bonus = np.where(out["is_brand"], 5, 0)
-    noise_penalty = np.where(out["is_noise"], 50, 0)
-
-    out["opportunity_score"] = (vol_score + cpc_score + intent_bonus + gap_bonus + brand_bonus - noise_penalty).clip(0, 100).round(1)
-    out["customer_need"] = out.apply(customer_need, axis=1)
-    out["owner_action"] = out.apply(owner_action, axis=1)
-    out["work_type"] = out.apply(work_type, axis=1)
-
-    # Owner priority is intentionally different from raw opportunity. It favors work that a local owner can actually act on.
-    owner_boost = np.where((~out["is_brand"]) & (~out["is_noise"]) & out["missing_onpage_signal"], 12, 0)
-    owner_boost += np.where(out["intent"].isin(["Menu / specials", "Local discovery", "Food item", "Events"]), 7, 0)
-    owner_penalty = np.where(out["is_noise"], 60, 0) + np.where((out["is_brand"]) & (~out["missing_onpage_signal"]), 18, 0)
-    out["owner_priority_score"] = (out["opportunity_score"] + owner_boost - owner_penalty).clip(0, 100).round(1)
-
-    out["estimated_ad_value"] = (out["volume"] * (out["cpc"].replace(0, 0.05))).round(2)
-    out["priority"] = pd.cut(out["owner_priority_score"], bins=[-1, 35, 65, 100], labels=["Low", "Medium", "High"]).astype(str)
-    out["recommended_title"] = out.apply(lambda r: suggest_title(r["page_title"], r["keyword"], r["owner_action"]), axis=1)
-    out["recommended_meta"] = out.apply(lambda r: suggest_meta(r["keyword"], r["customer_need"]), axis=1)
-    out["reason"] = out.apply(reason_for_row, axis=1)
-    out["page"] = out["url"].map(page_name)
-    out["keyword_label"] = out["keyword"].str.slice(0, 55)
-    return out
-
-
-def top_examples(df: pd.DataFrame, n: int = 3) -> str:
-    if df.empty:
-        return ""
-    values = df.sort_values("volume", ascending=False)["keyword"].dropna().astype(str).head(n).tolist()
-    return ", ".join(values)
-
-
-def page_recommendation(row) -> str:
-    if row["growth_volume"] >= 1000 and row["quick_wins"] >= 3:
-        return "Fix this page first: high non-brand demand and weak keyword coverage"
-    if row["growth_volume"] >= 500:
-        return "Improve this page: useful customer demand is already mapped here"
-    if row["brand_volume"] >= 1000:
-        return "Keep brand info clean: name, hours, photos, menu, contact"
-    if row["missing_onpage_count"] >= 5:
-        return "Rewrite title/H1 or split into a more focused page"
-    if row["meta_length"] < 120:
-        return "Improve the meta description"
-    return "Monitor; not an urgent page"
-
-
-def page_summary(enriched: pd.DataFrame, pages: pd.DataFrame) -> pd.DataFrame:
-    working = enriched.copy()
-    working["useful_volume"] = np.where(~working["is_noise"], working["volume"], 0)
-    working["growth_volume"] = np.where((~working["is_noise"]) & (~working["is_brand"]), working["volume"], 0)
-    working["brand_volume"] = np.where(working["is_brand"], working["volume"], 0)
-    working["noise_volume"] = np.where(working["is_noise"], working["volume"], 0)
-    working["quick_win"] = np.where((~working["is_noise"]) & (~working["is_brand"]) & working["missing_onpage_signal"] & (working["owner_priority_score"] >= 50), 1, 0)
-    working["missing_onpage_count"] = np.where(working["missing_onpage_signal"], 1, 0)
-
-    summary = (
-        working.groupby("url", dropna=False)
-        .agg(
-            page=("page", "first"),
-            keywords=("keyword", "count"),
-            useful_volume=("useful_volume", "sum"),
-            growth_volume=("growth_volume", "sum"),
-            brand_volume=("brand_volume", "sum"),
-            noise_volume=("noise_volume", "sum"),
-            avg_cpc=("cpc", "mean"),
-            max_cpc=("cpc", "max"),
-            avg_score=("owner_priority_score", "mean"),
-            quick_wins=("quick_win", "sum"),
-            missing_onpage_count=("missing_onpage_count", "sum"),
-            top_keyword=("keyword", lambda s: s.iloc[working.loc[s.index, "volume"].argmax()] if len(s) else ""),
-            top_customer_need=("customer_need", lambda s: working.loc[s.index].groupby("customer_need")["volume"].sum().sort_values(ascending=False).index[0] if len(s) else ""),
-        )
-        .reset_index()
-    )
-    metadata = pages.rename(columns={"title": "page_title"})
-    summary = summary.merge(metadata, on="url", how="left")
-    summary["title_length"] = summary["page_title"].fillna("").str.len()
-    summary["meta_length"] = summary["meta_description"].fillna("").str.len()
-    summary["recommended_focus"] = summary.apply(page_recommendation, axis=1)
-    return summary.sort_values(["quick_wins", "growth_volume", "useful_volume"], ascending=False)
-
-
-def build_action_plan(enriched: pd.DataFrame, max_rows: int = 30, include_brand: bool = False) -> pd.DataFrame:
-    useful = enriched[~enriched["is_noise"]].copy()
-    if not include_brand:
-        useful = useful[~useful["is_brand"]].copy()
-    if useful.empty:
-        useful = enriched.copy()
-
-    priority_order = {"High": 0, "Medium": 1, "Low": 2}
-    useful["_priority_rank"] = useful["priority"].map(priority_order).fillna(9)
-    useful = useful.sort_values(["_priority_rank", "owner_priority_score", "volume", "cpc"], ascending=[True, False, False, False])
-    useful["rank"] = range(1, len(useful) + 1)
-
-    cols = [
-        "rank",
-        "priority",
-        "owner_priority_score",
-        "owner_action",
-        "work_type",
-        "page",
-        "url",
-        "keyword",
-        "customer_need",
-        "volume",
-        "cpc",
-        "reason",
-        "recommended_title",
-        "recommended_meta",
-    ]
-    return useful[cols].head(max_rows)
-
-
-def demand_by_customer_need(df: pd.DataFrame) -> pd.DataFrame:
-    grouped = (
-        df.groupby("customer_need", as_index=False)
-        .agg(volume=("volume", "sum"), keywords=("keyword", "count"), examples=("keyword", lambda s: top_examples(df.loc[s.index], 3)))
-        .sort_values("volume", ascending=False)
-    )
-    total = grouped["volume"].sum()
-    grouped["share"] = np.where(total > 0, grouped["volume"] / total, 0)
-    grouped["label"] = grouped.apply(lambda r: f"{int(r['volume']):,} searches/mo • {r['share']:.0%}", axis=1)
-    return grouped
-
-
-def demand_by_work_type(df: pd.DataFrame) -> pd.DataFrame:
-    grouped = (
-        df.groupby("work_type", as_index=False)
-        .agg(volume=("volume", "sum"), keywords=("keyword", "count"), examples=("keyword", lambda s: top_examples(df.loc[s.index], 3)))
-        .sort_values("volume", ascending=False)
-    )
-    total = grouped["volume"].sum()
-    grouped["share"] = np.where(total > 0, grouped["volume"] / total, 0)
-    grouped["label"] = grouped.apply(lambda r: f"{int(r['volume']):,} • {r['share']:.0%}", axis=1)
-    return grouped
-
-
-def make_content_brief(enriched: pd.DataFrame, url: str) -> dict:
-    page_df = enriched[enriched["url"] == url].sort_values(["owner_priority_score", "volume"], ascending=False)
-    if page_df.empty:
-        return {}
-
-    source = page_df[(~page_df["is_noise"]) & (~page_df["is_brand"])]
-    if source.empty:
-        source = page_df[~page_df["is_noise"]]
-    if source.empty:
-        source = page_df
-
-    primary = source.iloc[0]
-    secondary = source[source["keyword"] != primary["keyword"]].head(8)
-
-    sections = []
-    needs = set(source["customer_need"].tolist())
-    if "Menu, prices or specials" in needs:
-        sections.extend(["Menu highlights", "Daily specials", "Popular food and drink categories"])
-    if "Looking for a place nearby" in needs:
-        sections.extend(["Why locals choose us", "Areas served", "Location and parking"])
-    if "Specific food or drinks" in needs:
-        sections.extend(["Featured dishes", "Best-selling items", "Food and drink pairings"])
-    if "Events, parties or catering" in needs:
-        sections.extend(["Upcoming events", "Private parties", "Live entertainment"])
-    if "Hours, photos, contact or reviews" in needs:
-        sections.extend(["Hours", "Contact", "Photos", "Reviews"])
-    if not sections:
-        sections.extend(["Overview", "Why visit", "Frequently asked questions"])
-
-    faqs = []
-    for kw in source["keyword"].head(12):
-        k = kw.lower()
-        if "menu" in k:
-            faqs.append(f"What is on the {kw}?")
-        elif "hours" in k:
-            faqs.append("What are the hours?")
-        elif "near me" in k or "loves park" in k or "rockford" in k:
-            faqs.append(f"Is this a good place for {kw}?")
-        elif "event" in k or "bingo" in k or "music" in k:
-            faqs.append(f"When is the next {kw} event?")
-        elif "fish fry" in k:
-            faqs.append("Do you offer a fish fry?")
-    faqs = list(dict.fromkeys(faqs))[:5]
-
-    return {
-        "primary_keyword": primary["keyword"],
-        "recommended_title": primary["recommended_title"],
-        "recommended_meta": primary["recommended_meta"],
-        "secondary_keywords": ", ".join(secondary["keyword"].tolist()),
-        "sections": sections,
-        "faqs": faqs,
-    }
-
-
-def plot_bar(df, x, y, title, color=None, text=None, hover_data=None, height=470):
-    fig = px.bar(
-        df,
-        x=x,
-        y=y,
-        orientation="h",
-        color=color,
-        text=text,
-        hover_data=hover_data,
-        title=title,
-    )
-    fig.update_yaxes(autorange="reversed", title="")
-    fig.update_layout(height=height, margin=dict(l=10, r=10, t=50, b=10), xaxis_title="Monthly searches" if x == "volume" else None)
-    if text:
-        fig.update_traces(textposition="outside", cliponaxis=False)
-    return fig
+hide_noise = st.sidebar.checkbox("Hide competitor/noise terms", value=True)
+min_volume = st.sidebar.slider("Minimum search volume", 0, 1000, 0, step=10)
+keywords_per_page = st.sidebar.slider("Keywords shown per page card", 3, 30, 10)
 
 
 # =============================================================================
-# UI
+# Empty state
+# =============================================================================
+if not raw:
+    st.markdown(
+        """
+        <div class="hero">
+            <h1>Local SEO Report</h1>
+            <p>Open an audit CSV to see a simple, page-by-page report: what to fix first, what customers search for, and which keywords belong on each page.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.info("Choose a CSV from the sidebar to begin.")
+    st.stop()
+
+
+# =============================================================================
+# Data preparation
+# =============================================================================
+project_name, pages_df, kw_df_raw = parse_audit_csv(raw)
+base_url = parse_base_url(project_name)
+kw_df = make_enriched_keywords(kw_df_raw, brand_terms, noise_terms)
+
+if min_volume > 0 and not kw_df.empty:
+    kw_df = kw_df[kw_df['Volume'] >= min_volume].copy()
+if hide_noise and not kw_df.empty:
+    kw_df = kw_df[~kw_df['Is noise']].copy()
+
+page_df = make_page_summary(pages_df, kw_df)
+
+if kw_df.empty or pages_df.empty:
+    st.warning("I could open the CSV, but I could not find usable page/keyword data in it.")
+    st.stop()
+
+useful_df = kw_df[~kw_df['Is noise']].copy()
+growth_df = useful_df[~useful_df['Is brand']].copy()
+brand_df = useful_df[useful_df['Is brand']].copy()
+missed_df = growth_df[~growth_df['Aligned']].copy()
+
+
+# =============================================================================
+# Header + Metrics
 # =============================================================================
 st.markdown(
-    """
+    f"""
     <div class="hero">
-        <h1>📍 Local SEO Action Dashboard</h1>
-        <p>Built for a regular local business owner: what should I fix first, what are customers searching for, and which pages need work?</p>
+        <h1>Local SEO Report</h1>
+        <p>{short_text(project_name or file_name, 150)} — a clean view of what pages need work, what customers are searching for, and what to update next.</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-with st.sidebar:
-    st.header("1. Choose data source")
-    data_source = st.radio("CSV source", ["Upload a CSV", "Open CSV from local folder"], horizontal=False)
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Pages", f"{len(pages_df):,}")
+m2.metric("Keywords", f"{len(kw_df):,}")
+m3.metric("Brand searches", compact_number(brand_df['Volume'].sum() if not brand_df.empty else 0))
+m4.metric("Growth searches", compact_number(growth_df['Volume'].sum() if not growth_df.empty else 0))
 
-    file_bytes = None
-    source_name = None
 
-    if data_source == "Upload a CSV":
-        uploaded = st.file_uploader("Upload SEO audit CSV", type=["csv"])
-        if uploaded is not None:
-            file_bytes = uploaded.getvalue()
-            source_name = uploaded.name
-    else:
-        default_dir = str(app_directory())
-        local_dir = st.text_input(
-            "Folder path",
-            value=default_dir,
-            help="This reads CSV files from the machine/server running Streamlit.",
-        )
-        recursive_lookup = st.checkbox("Include subfolders", value=False)
-        root = Path(local_dir).expanduser()
-        csv_files = list_csv_files(local_dir, recursive=recursive_lookup)
+# =============================================================================
+# Tabs / Three questions
+# =============================================================================
+tab_fix, tab_demand, tab_pages = st.tabs(
+    ["1. What should I fix first?", "2. What are customers searching for?", "3. Which keywords go with each page?"]
+)
 
-        if not root.exists():
-            st.warning("That folder does not exist.")
-        elif not csv_files:
-            st.info("No CSV files found in that folder.")
+with tab_fix:
+    st.markdown('<div class="section-title">What should I fix first?</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-help">This is the work queue. It focuses on local/business value, not agency-style vanity charts.</div>',
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns([0.9, 1.1], gap="large")
+    with left:
+        for item in action_summary(kw_df, page_df):
+            render_action_card(item)
+
+    with right:
+        chart_df = page_df[page_df['Attention score'] > 0].head(12).copy()
+        if chart_df.empty:
+            st.success("No obvious page gaps found after your current filters.")
         else:
-            file_options = {path_label(path, root): path for path in csv_files}
-            selected_label = st.selectbox("Available CSV files", list(file_options.keys()))
-            selected_path = file_options[selected_label]
-            try:
-                file_bytes = read_local_csv_bytes(selected_path)
-                source_name = str(selected_path)
-                st.caption(f"Loaded: {selected_path.name}")
-            except Exception as exc:
-                st.error(f"Could not read selected file: {exc}")
+            chart_df = chart_df.sort_values('Attention score', ascending=True)
+            fig = px.bar(
+                chart_df,
+                x='Missed volume',
+                y='Page',
+                orientation='h',
+                text=chart_df['Missed volume'].apply(compact_number),
+                hover_data={'Growth volume': True, 'Useful keywords': True, 'Attention score': True},
+                title="Pages with the biggest keyword gap",
+            )
+            fig.update_traces(textposition='outside', cliponaxis=False)
+            fig.update_layout(
+                height=430,
+                margin=dict(l=8, r=30, t=48, b=8),
+                xaxis_title="searches/month not clearly covered",
+                yaxis_title="",
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                showlegend=False,
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-    st.header("2. Clean up the data")
-    brand_terms_raw = st.text_area("Business / brand terms", DEFAULT_BRAND_TERMS)
-    noise_terms_raw = st.text_area(
-        "Competitor, misspelling, or bad-fit terms",
-        DEFAULT_NOISE_TERMS,
-        help="These are not deleted. They are labeled so the charts do not trick you into chasing bad traffic.",
-    )
-    min_volume = st.slider("Minimum monthly searches", 0, 5000, 0, step=10)
-    min_cpc = st.slider("Minimum CPC", 0.0, 10.0, 0.0, step=0.05)
-    hide_noise = st.checkbox("Hide bad-fit/competitor searches", value=True)
-    include_brand_in_opportunity = st.checkbox(
-        "Include brand searches in 'what to fix first' charts",
-        value=False,
-        help="Brand searches matter, but they often overpower growth opportunities. Keep this off when planning new SEO work.",
-    )
-    show_rows = st.slider("Rows in action plan", 10, 100, 30, step=5)
-
-if not file_bytes:
-    st.info("Choose a CSV source to generate the dashboard. You can upload a new file or open an existing CSV from a local folder.")
-    st.stop()
-
-st.caption(f"Analyzing source: `{source_name}`")
-
-try:
-    raw_keywords, pages, meta = parse_audit_csv(file_bytes)
-except Exception as exc:
-    st.error(f"Could not parse the CSV: {exc}")
-    st.stop()
-
-brand_terms = split_terms(brand_terms_raw)
-noise_terms = split_terms(noise_terms_raw)
-
-enriched = enrich_keywords(raw_keywords, pages, brand_terms, noise_terms)
-
-filtered = enriched[(enriched["volume"] >= min_volume) & (enriched["cpc"] >= min_cpc)].copy()
-if hide_noise:
-    filtered = filtered[~filtered["is_noise"]].copy()
-
-if filtered.empty:
-    st.warning("No keywords match the current filters.")
-    st.stop()
-
-owner_focus = filtered[~filtered["is_noise"]].copy()
-if not include_brand_in_opportunity:
-    owner_focus = owner_focus[~owner_focus["is_brand"]].copy()
-if owner_focus.empty:
-    owner_focus = filtered.copy()
-
-pages_view = page_summary(filtered, pages)
-owner_pages_view = page_summary(owner_focus, pages)
-action_plan = build_action_plan(filtered, show_rows, include_brand=include_brand_in_opportunity)
-
-# =============================================================================
-# SUMMARY
-# =============================================================================
-total_volume = int(enriched["volume"].sum())
-visible_volume = int(filtered["volume"].sum())
-noise_volume_all = int(enriched.loc[enriched["is_noise"], "volume"].sum())
-brand_volume = int(filtered.loc[filtered["is_brand"], "volume"].sum())
-growth_volume = int(filtered.loc[(~filtered["is_noise"]) & (~filtered["is_brand"]), "volume"].sum())
-quick_win_count = int(((owner_focus["missing_onpage_signal"]) & (owner_focus["owner_priority_score"] >= 50)).sum())
-
-m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("Visible searches/mo", f"{visible_volume:,}")
-m2.metric("Growth searches", f"{growth_volume:,}", help="Non-brand, non-noise demand. This is usually where new SEO growth comes from.")
-m3.metric("Brand searches", f"{brand_volume:,}", help="People already searching for the business by name.")
-m4.metric("Quick wins", f"{quick_win_count:,}", help="Useful terms with weak title/H1/URL coverage.")
-m5.metric("Noise found", f"{noise_volume_all:,}", help="Bad-fit, competitor, misspelling, or unrelated volume based on your settings.")
-
-best_task = action_plan.iloc[0] if not action_plan.empty else None
-best_need = demand_by_customer_need(filtered[~filtered["is_noise"]]).iloc[0]
-best_page = owner_pages_view.iloc[0] if not owner_pages_view.empty else None
-
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.markdown(
-        f"""
-        <div class="plain-card">
-            <h3>1. Do first</h3>
-            <p><b>{best_task['owner_action'] if best_task is not None else 'N/A'}</b><br>
-            Keyword: {best_task['keyword'] if best_task is not None else 'N/A'}<br>
-            Page: {best_task['page'] if best_task is not None else 'N/A'}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-with c2:
-    st.markdown(
-        f"""
-        <div class="plain-card">
-            <h3>2. Biggest customer need</h3>
-            <p><b>{best_need['customer_need']}</b><br>
-            {int(best_need['volume']):,} searches/month<br>
-            Examples: {best_need['examples']}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-with c3:
-    st.markdown(
-        f"""
-        <div class="plain-card">
-            <h3>3. Page to improve</h3>
-            <p><b>{best_page['page'] if best_page is not None else 'N/A'}</b><br>
-            {int(best_page['growth_volume']) if best_page is not None else 0:,} growth searches/month<br>
-            {best_page['recommended_focus'] if best_page is not None else ''}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-# =============================================================================
-# OWNER QUESTIONS
-# =============================================================================
-tabs = st.tabs([
-    "1) What should I fix first?",
-    "2) What are customers searching for?",
-    "3) Which pages need work?",
-    "Action plan + exports",
-])
-
-with tabs[0]:
-    st.markdown('<div class="section-title">Question 1: What should I fix first?</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="answer-box">This chart ranks the work a local owner can actually do: improve a page, add a section, clean up business info, or review a bad keyword. It does not reward raw volume alone.</div>',
-        unsafe_allow_html=True,
-    )
-
-    top_tasks = action_plan.head(15).copy()
-    top_tasks["task"] = top_tasks.apply(lambda r: f"{r['keyword']}  →  {r['page']}", axis=1)
-    fig_tasks = px.bar(
-        top_tasks.sort_values("owner_priority_score", ascending=True),
-        x="owner_priority_score",
-        y="task",
-        color="work_type",
-        text="owner_action",
-        hover_data=["volume", "cpc", "customer_need", "reason", "url"],
-        title="Top SEO jobs to do first",
-        labels={"owner_priority_score": "Priority score", "task": "Keyword → page", "work_type": "Work type"},
-    )
-    fig_tasks.update_layout(height=560, margin=dict(l=10, r=10, t=50, b=10))
-    fig_tasks.update_traces(textposition="inside")
-    st.plotly_chart(fig_tasks, use_container_width=True)
-
-    st.subheader("Why these are first")
-    st.dataframe(
-        top_tasks[["rank", "priority", "owner_action", "keyword", "page", "volume", "cpc", "reason", "recommended_title"]],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "rank": st.column_config.NumberColumn("#", width="small"),
-            "owner_action": st.column_config.TextColumn("Do this", width="medium"),
-            "volume": st.column_config.NumberColumn("Searches/mo", format="%d"),
-            "cpc": st.column_config.NumberColumn("CPC", format="$%.2f"),
-        },
-    )
-
-    work = demand_by_work_type(owner_focus)
-    fig_work = plot_bar(
-        work.sort_values("volume", ascending=True),
-        x="volume",
-        y="work_type",
-        title="How much demand each type of work affects",
-        color="work_type",
-        text="label",
-        hover_data=["keywords", "examples"],
-        height=390,
-    )
-    st.plotly_chart(fig_work, use_container_width=True)
-
-with tabs[1]:
-    st.markdown('<div class="section-title">Question 2: What are customers actually searching for?</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="answer-box">This replaces the confusing “search intent” treemap. Each bar is written in plain business language: what the customer probably wanted when they searched.</div>',
-        unsafe_allow_html=True,
-    )
-
-    customer_df = demand_by_customer_need(filtered[~filtered["is_noise"]])
-    fig_need = plot_bar(
-        customer_df.sort_values("volume", ascending=True),
-        x="volume",
-        y="customer_need",
-        title="Customer demand by plain-language need",
-        color="customer_need",
-        text="label",
-        hover_data=["keywords", "examples"],
-        height=500,
-    )
-    st.plotly_chart(fig_need, use_container_width=True)
-
-    st.subheader("Examples inside each bucket")
-    st.dataframe(
-        customer_df[["customer_need", "volume", "share", "keywords", "examples"]],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "customer_need": st.column_config.TextColumn("Customer was looking for...", width="medium"),
-            "volume": st.column_config.NumberColumn("Searches/mo", format="%d"),
-            "share": st.column_config.ProgressColumn("Share", min_value=0, max_value=1, format="%.0%%"),
-            "examples": st.column_config.TextColumn("Example searches", width="large"),
-        },
-    )
-
-    brand_df = filtered[(filtered["is_brand"]) & (~filtered["is_noise"])].sort_values("volume", ascending=False).head(12)
-    if not brand_df.empty:
-        st.subheader("Brand searches: people already looking for you")
-        st.caption("This is not usually new growth, but it matters because these people are close to visiting or calling.")
+    st.markdown('<div class="clean-table-title">Top keyword fixes</div>', unsafe_allow_html=True)
+    fix_table = missed_df.sort_values(['Opportunity score', 'Volume'], ascending=False).head(30).copy()
+    if fix_table.empty:
+        st.info("No obvious keyword/page mismatches after filters.")
+    else:
         st.dataframe(
-            brand_df[["keyword", "volume", "cpc", "page", "owner_action", "reason"]],
+            fix_table[['Keyword', 'Volume', 'CPC', 'Customer need', 'Page', 'Recommendation']].style.format(
+                {'Volume': '{:,.0f}', 'CPC': '${:,.2f}'}
+            ),
             use_container_width=True,
             hide_index=True,
-            column_config={
-                "volume": st.column_config.NumberColumn("Searches/mo", format="%d"),
-                "cpc": st.column_config.NumberColumn("CPC", format="$%.2f"),
-            },
         )
 
-with tabs[2]:
-    st.markdown('<div class="section-title">Question 3: Which pages need work?</div>', unsafe_allow_html=True)
+with tab_demand:
+    st.markdown('<div class="section-title">What are customers searching for?</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="answer-box">This looks at existing URLs and asks: where is useful demand already mapped, and where does the page fail to clearly target those searches?</div>',
+        '<div class="section-help">This replaces vague “search intent” buckets with plain business language. It shows what customers actually want from the site.</div>',
         unsafe_allow_html=True,
     )
 
-    page_chart = owner_pages_view.head(15).copy()
-    fig_pages = px.bar(
-        page_chart.sort_values("growth_volume", ascending=True),
-        x="growth_volume",
-        y="page",
-        color="quick_wins",
-        text="recommended_focus",
-        hover_data=["url", "top_keyword", "top_customer_need", "keywords", "missing_onpage_count", "useful_volume", "brand_volume"],
-        title="Pages with the most growth demand",
-        labels={"growth_volume": "Non-brand searches/month", "quick_wins": "Quick wins", "page": "Page"},
-    )
-    fig_pages.update_layout(height=540, margin=dict(l=10, r=10, t=50, b=10))
-    fig_pages.update_traces(textposition="inside")
-    st.plotly_chart(fig_pages, use_container_width=True)
+    demand_base = useful_df.copy()
+    if hide_noise:
+        demand_base = demand_base[~demand_base['Is noise']]
 
-    st.subheader("Page diagnosis")
-    page_cols = [
-        "page",
-        "recommended_focus",
-        "growth_volume",
-        "useful_volume",
-        "brand_volume",
-        "quick_wins",
-        "missing_onpage_count",
-        "top_customer_need",
-        "top_keyword",
-        "page_title",
-        "h1",
-        "meta_description",
-        "url",
-    ]
-    st.dataframe(
-        owner_pages_view[page_cols],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "growth_volume": st.column_config.NumberColumn("Growth searches", format="%d"),
-            "useful_volume": st.column_config.NumberColumn("Useful searches", format="%d"),
-            "brand_volume": st.column_config.NumberColumn("Brand searches", format="%d"),
-            "quick_wins": st.column_config.NumberColumn("Quick wins", format="%d"),
-            "missing_onpage_count": st.column_config.NumberColumn("Weak matches", format="%d"),
-            "recommended_focus": st.column_config.TextColumn("Recommended move", width="large"),
-        },
-    )
+    demand = demand_base.groupby('Customer need', as_index=False).agg(
+        Volume=('Volume', 'sum'),
+        Keywords=('Keyword', 'count'),
+    ).sort_values('Volume', ascending=False)
 
-    st.subheader("One-page content brief")
-    url_options = owner_pages_view["url"].tolist()
-    selected_url = st.selectbox("Choose a page", url_options)
-    brief = make_content_brief(filtered, selected_url)
+    left, right = st.columns([1.1, 0.9], gap="large")
+    with left:
+        if demand.empty:
+            st.info("No demand data available.")
+        else:
+            chart_df = demand.sort_values('Volume', ascending=True)
+            fig = px.bar(
+                chart_df,
+                x='Volume',
+                y='Customer need',
+                orientation='h',
+                text=chart_df['Volume'].apply(compact_number),
+                title="Customer demand by topic",
+            )
+            fig.update_traces(textposition='outside', cliponaxis=False)
+            fig.update_layout(
+                height=430,
+                margin=dict(l=8, r=35, t=48, b=8),
+                xaxis_title="searches/month",
+                yaxis_title="",
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                showlegend=False,
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-    if brief:
-        b1, b2 = st.columns([1, 1])
-        with b1:
-            st.write(f"**Primary keyword:** {brief['primary_keyword']}")
-            st.write(f"**SEO title:** {brief['recommended_title']}")
-            st.write(f"**Meta description:** {brief['recommended_meta']}")
-            st.write(f"**Secondary keywords:** {brief['secondary_keywords'] or 'None'}")
-        with b2:
-            st.write("**Suggested sections**")
-            for section in brief["sections"]:
-                st.write(f"- {section}")
-            if brief["faqs"]:
-                st.write("**FAQ ideas**")
-                for q in brief["faqs"]:
-                    st.write(f"- {q}")
-
-with tabs[3]:
-    st.markdown('<div class="section-title">Action plan + exports</div>', unsafe_allow_html=True)
-    st.caption("The table below is the work queue. Hand this to whoever edits the website.")
-
-    st.dataframe(
-        action_plan,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "rank": st.column_config.NumberColumn("#", width="small"),
-            "owner_priority_score": st.column_config.ProgressColumn("Priority", min_value=0, max_value=100),
-            "owner_action": st.column_config.TextColumn("Do this", width="medium"),
-            "customer_need": st.column_config.TextColumn("Customer need", width="medium"),
-            "volume": st.column_config.NumberColumn("Searches/mo", format="%d"),
-            "cpc": st.column_config.NumberColumn("CPC", format="$%.2f"),
-            "recommended_meta": st.column_config.TextColumn("Recommended meta", width="large"),
-            "recommended_title": st.column_config.TextColumn("Recommended title", width="large"),
-        },
-    )
-
-    st.subheader("Keyword table")
-    keyword_cols = [
-        "priority",
-        "owner_priority_score",
-        "owner_action",
-        "work_type",
-        "keyword",
-        "customer_need",
-        "page",
-        "url",
-        "volume",
-        "cpc",
-        "is_brand",
-        "is_noise",
-        "missing_onpage_signal",
-        "reason",
-    ]
-    st.dataframe(
-        filtered.sort_values(["owner_priority_score", "volume"], ascending=False)[keyword_cols],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "owner_priority_score": st.column_config.ProgressColumn("Priority", min_value=0, max_value=100),
-            "volume": st.column_config.NumberColumn("Searches/mo", format="%d"),
-            "cpc": st.column_config.NumberColumn("CPC", format="$%.2f"),
-        },
-    )
-
-    d1, d2, d3 = st.columns(3)
-    with d1:
-        st.download_button(
-            "Download action plan CSV",
-            data=action_plan.to_csv(index=False).encode("utf-8"),
-            file_name="local_seo_action_plan.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-    with d2:
-        st.download_button(
-            "Download enriched keywords CSV",
-            data=filtered.to_csv(index=False).encode("utf-8"),
-            file_name="local_seo_keywords_enriched.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-    with d3:
-        st.download_button(
-            "Download page diagnosis CSV",
-            data=pages_view.to_csv(index=False).encode("utf-8"),
-            file_name="local_seo_page_diagnosis.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-    with st.expander("How the priority score works"):
+    with right:
+        st.markdown('<div class="clean-table-title">What the chart means</div>', unsafe_allow_html=True)
         st.markdown(
             """
-            The score favors useful local-business work: real search volume, some commercial value, customer intent, and weak title/H1/URL coverage.
-
-            It penalizes bad-fit terms and keeps brand searches from overpowering growth work. Brand searches still appear in the customer demand view because they matter for calls, visits, and trust.
+            - **Brand name searches**: people already trying to find you. Make the basic pages clean.
+            - **Menu, food & specials**: people deciding what to eat or drink. Your menu page matters most.
+            - **Nearby restaurants & bars**: people comparing local options. Your homepage and location wording matter.
+            - **Events & private parties**: people looking for a reason to book or contact you.
             """
         )
+
+    st.markdown('<div class="clean-table-title">Top searches by customer topic</div>', unsafe_allow_html=True)
+    selected_need = st.selectbox(
+        "Choose a topic",
+        demand['Customer need'].tolist() if not demand.empty else [],
+    )
+    topic_table = demand_base[demand_base['Customer need'] == selected_need].sort_values('Volume', ascending=False).head(50)
+    st.dataframe(
+        topic_table[['Keyword', 'Volume', 'CPC', 'Page', 'Recommendation']].style.format(
+            {'Volume': '{:,.0f}', 'CPC': '${:,.2f}'}
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+with tab_pages:
+    st.markdown('<div class="section-title">Which keywords go with each page?</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-help">This is the clean page-by-page report view. Each card shows the page, basic SEO tag health, and the best assigned keywords.</div>',
+        unsafe_allow_html=True,
+    )
+
+    sort_mode = st.radio(
+        "Sort pages by",
+        ["Needs attention", "Highest growth searches", "Original order"],
+        horizontal=True,
+    )
+
+    if sort_mode == "Highest growth searches":
+        pages_to_show = page_df.sort_values('Growth volume', ascending=False)
+    elif sort_mode == "Original order":
+        pages_to_show = page_df.sort_values('Page ID')
+    else:
+        pages_to_show = page_df.sort_values(['Attention score', 'Growth volume'], ascending=False)
+
+    for _, page in pages_to_show.iterrows():
+        page_keywords = kw_df[kw_df['Page ID'] == page['Page ID']].sort_values(['Opportunity score', 'Volume'], ascending=False)
+        p_url = full_url(base_url, page['URL'])
+        title_state, title_class = length_status('title', page['Title length'])
+        desc_state, desc_class = length_status('desc', page['Meta description length'])
+
+        main_pill = 'Needs work' if page['Attention score'] > 0 else 'Looks okay'
+        main_class = 'pill-orange' if page['Attention score'] > 0 else 'pill-green'
+
+        st.markdown(
+            f"""
+            <div class="page-card">
+                <div class="page-card-header">
+                    <div class="name">{page['Page']}</div>
+                    <span class="pill {main_class}">{main_pill}</span>
+                </div>
+                <div class="page-card-body">
+                    <div class="url-line">{p_url}</div>
+                    <div class="meta-title">{short_text(page['Title'], 130) or 'No title found'}</div>
+                    <div class="desc">{short_text(page['Description'], 230) or 'No meta description found'}</div>
+                    <div class="mini-grid">
+                        <div class="mini-box"><div class="mini-label">Growth searches</div><div class="mini-value">{compact_number(page['Growth volume'])}</div></div>
+                        <div class="mini-box"><div class="mini-label">Missed searches</div><div class="mini-value">{compact_number(page['Missed volume'])}</div></div>
+                        <div class="mini-box"><div class="mini-label">Title</div><div class="mini-value"><span class="pill {title_class}">{page['Title length']} chars · {title_state}</span></div></div>
+                        <div class="mini-box"><div class="mini-label">Meta description</div><div class="mini-value"><span class="pill {desc_class}">{page['Meta description length']} chars · {desc_state}</span></div></div>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        display_cols = ['Keyword', 'Volume', 'CPC', 'Customer need', 'Aligned', 'Recommendation']
+        display_df = page_keywords.head(keywords_per_page)[display_cols].copy()
+        display_df['Aligned'] = display_df['Aligned'].map({True: 'Yes', False: 'No'})
+        st.dataframe(
+            display_df.style.format({'Volume': '{:,.0f}', 'CPC': '${:,.2f}'}),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.write("")
+
+
+# =============================================================================
+# Exports
+# =============================================================================
+st.divider()
+export_col1, export_col2, export_col3 = st.columns(3)
+with export_col1:
+    st.download_button(
+        "Download keyword report CSV",
+        kw_df.drop(columns=['Keyword lower'], errors='ignore').to_csv(index=False).encode('utf-8'),
+        file_name='local-seo-keyword-report.csv',
+        mime='text/csv',
+        use_container_width=True,
+    )
+with export_col2:
+    st.download_button(
+        "Download page report CSV",
+        page_df.to_csv(index=False).encode('utf-8'),
+        file_name='local-seo-page-report.csv',
+        mime='text/csv',
+        use_container_width=True,
+    )
+with export_col3:
+    action_rows = pd.DataFrame(action_summary(kw_df, page_df))
+    st.download_button(
+        "Download action list CSV",
+        action_rows.to_csv(index=False).encode('utf-8'),
+        file_name='local-seo-action-list.csv',
+        mime='text/csv',
+        use_container_width=True,
+    )
