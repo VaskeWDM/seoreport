@@ -3,13 +3,10 @@ import pandas as pd
 import csv
 import io
 
-# ======================================================================
-# PAGE CONFIGURATION
-# ======================================================================
-st.set_page_config(page_title="SEO Report Viewer", layout="wide")
+st.set_page_config(page_title="SEO Report", layout="wide")
 
 # ======================================================================
-# CUSTOM CSV PARSER
+# PARSER
 # ======================================================================
 @st.cache_data
 def parse_audit_csv(file_bytes):
@@ -40,7 +37,7 @@ def parse_audit_csv(file_bytes):
             current_group['Name'] = row[0].replace('&amp;', '&')
             current_group['Title'] = row[1].replace('&amp;', '&')
             current_group['URL'] = row[2]
-            current_group['Description'] = row[3].replace('&amp;', '&')
+            current_group['DESC'] = row[3].replace('&amp;', '&')
             current_group['H1'] = row[4].replace('&amp;', '&')
             current_group['keywords'] = []
             expecting_group_data = False
@@ -60,6 +57,8 @@ def parse_audit_csv(file_bytes):
             kw = row[0]
             vol_raw = row[1].replace('="', '').replace('"', '') if len(row) > 1 else "0"
             cpc_raw = row[2].replace('="', '').replace('"', '') if len(row) > 2 else "0"
+            intitle = row[3].replace('="', '').replace('"', '') if len(row) > 3 else ""
+            inurl = row[4].replace('="', '').replace('"', '') if len(row) > 4 else ""
             
             try: vol = int(vol_raw)
             except: vol = 0
@@ -70,7 +69,9 @@ def parse_audit_csv(file_bytes):
             current_group['keywords'].append({
                 'Keyword': kw,
                 'Volume': vol,
-                'CPC ($)': cpc
+                'CPC': cpc,
+                'inTITLE': intitle,
+                'inURL': inurl
             })
 
     if current_group and 'keywords' in current_group:
@@ -79,63 +80,58 @@ def parse_audit_csv(file_bytes):
     return project_name, groups
 
 # ======================================================================
-# APP LAYOUT
+# UI LAYOUT
 # ======================================================================
-st.title("📄 SEO Report")
+st.title("SEO Audit Report")
 
-# 1. Uploader at the top
+# Uploader
 uploaded_file = st.file_uploader("Upload your SEO .csv file", type=['csv'])
 
 if not uploaded_file:
-    st.info("Awaiting file upload...")
+    st.info("Please upload a CSV file to view the report.")
     st.stop()
 
-# 2. Parse the file
 project_name, groups_data = parse_audit_csv(uploaded_file)
+st.subheader(f"Project: {project_name}")
 
-st.markdown(f"### Project: **{project_name}**")
-
-# 3. Global Filters
-st.markdown("#### ⚙️ Filters")
+# FILTERS (As requested)
 col1, col2 = st.columns(2)
-hide_zero_cpc = col1.checkbox("Hide $0 CPC Keywords", value=False)
-hide_low_volume = col2.checkbox("Hide < 50 Search Volume", value=False)
+hide_zero_cpc = col1.checkbox("Hide $0 CPC", value=False)
+hide_low_volume = col2.checkbox("Hide < 50 Volume", value=False)
 
 st.divider()
 
-# 4. Display the entire report on one page
+# DISPLAY ALL ON ONE PAGE
 for group in groups_data:
     df = pd.DataFrame(group['keywords'])
     
     if df.empty:
         continue
         
-    # Apply user filters
+    # Apply Filters
     if hide_zero_cpc:
-        df = df[df['CPC ($)'] > 0]
+        df = df[df['CPC'] > 0]
     if hide_low_volume:
         df = df[df['Volume'] >= 50]
         
-    # Skip rendering this group if filters hide all its keywords
+    # Skip if group is empty after filtering
     if df.empty:
         continue 
 
-    # Sort remaining keywords by Volume
+    # Clean formatting for display
     df = df.sort_values(by='Volume', ascending=False)
-
-    # Print Group Headers
-    st.markdown(f"### 🔗 {group['URL']}")
-    st.markdown(f"**H1:** {group['H1']} | **Title:** {group['Title']}")
     
-    # Print Data Table
+    # Print the group header
+    st.markdown(f"### {group['Name']}")
+    st.markdown(f"**URL:** {group['URL']} | **H1:** {group['H1']}")
+    
+    # Render the exact table
     st.dataframe(
         df.style.format({
             'Volume': '{:,}', 
-            'CPC ($)': '${:.2f}'
+            'CPC': '${:.2f}'
         }),
         use_container_width=True,
         hide_index=True
     )
-    
-    # Add a little spacing between groups
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.write("") # Spacer between groups
