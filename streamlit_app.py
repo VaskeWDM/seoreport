@@ -3,9 +3,11 @@ import pandas as pd
 import plotly.express as px
 import csv
 import io
+import glob
+import os
 
 # ======================================================================
-# PAGE CONFIG
+# PAGE CONFIG & CSS
 # ======================================================================
 st.set_page_config(page_title="SEO Strategy App", layout="wide")
 
@@ -17,15 +19,12 @@ st.markdown("""
         padding: 15px;
         border: 1px solid #4a4a8a;
     }
-    .question-header {
-        color: #4facf7;
-        font-size: 22px;
-        font-weight: 600;
-        margin-top: 30px;
-        margin-bottom: 10px;
-        border-bottom: 1px solid #333;
-        padding-bottom: 5px;
+    /* Make tabs larger and clearer */
+    button[data-baseweb="tab"] {
+        font-size: 18px !important;
+        font-weight: 600 !important;
     }
+    section[data-testid="stSidebar"] hr { margin: 12px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -33,9 +32,8 @@ st.markdown("""
 # PARSER
 # ======================================================================
 @st.cache_data
-def parse_audit_csv(file_bytes):
-    content = file_bytes.getvalue().decode('utf-8')
-    reader = csv.reader(io.StringIO(content))
+def parse_audit_csv(file_content_str):
+    reader = csv.reader(io.StringIO(file_content_str))
     lines = list(reader)
     
     groups = []
@@ -89,19 +87,49 @@ def parse_audit_csv(file_bytes):
     return groups
 
 # ======================================================================
-# APP LAYOUT
+# SIDEBAR: FILE SELECTION
 # ======================================================================
-st.title("🚀 SEO Strategy Dashboard")
+st.sidebar.markdown("## 📂 Report Library")
+mode = st.sidebar.radio("Choose Input Method:", ("📄 Select Local File", "📤 Upload New CSV"))
+st.sidebar.divider()
 
-# The drag-and-drop file uploader
-uploaded_file = st.file_uploader("📥 Upload SEO Audit CSV", type=['csv'])
+file_content_str = None
+report_title = "SEO Report"
 
-if not uploaded_file:
-    st.info("Upload your CSV to generate the SEO breakdown.")
+if mode == "📄 Select Local File":
+    # Scan local directory for CSVs
+    all_files = glob.glob("**/*.csv", recursive=True) + glob.glob("**/*.CSV", recursive=True)
+    repo_files = sorted(list(set(all_files)), reverse=True)
+    
+    if repo_files:
+        selected_file = st.sidebar.selectbox("Pick an SEO report:", repo_files)
+        if selected_file:
+            try:
+                with open(selected_file, 'r', encoding='utf-8') as f:
+                    file_content_str = f.read()
+                report_title = os.path.basename(selected_file)
+            except Exception as e:
+                st.sidebar.error(f"Error reading file: {e}")
+    else:
+        st.sidebar.info("No CSV files found in this folder.")
+
+elif mode == "📤 Upload New CSV":
+    uploaded_file = st.sidebar.file_uploader("Drop SEO CSV here", type=['csv'])
+    if uploaded_file:
+        try:
+            file_content_str = uploaded_file.getvalue().decode('utf-8')
+            report_title = uploaded_file.name
+        except Exception as e:
+            st.sidebar.error(f"Error reading file: {e}")
+
+if not file_content_str:
+    st.info("👈 Please select a local file or upload a new CSV from the sidebar to begin.")
     st.stop()
 
-# Parse & Flatten Data
-groups_data = parse_audit_csv(uploaded_file)
+# ======================================================================
+# DATA PROCESSING
+# ======================================================================
+groups_data = parse_audit_csv(file_content_str)
 all_keywords = []
 for g in groups_data:
     for kw in g['keywords']:
@@ -114,58 +142,74 @@ for g in groups_data:
 
 df_all = pd.DataFrame(all_keywords)
 if df_all.empty:
-    st.warning("No keywords found.")
+    st.warning("No keyword data found in this file.")
     st.stop()
 
-# --- GLOBAL METRICS ---
+# ======================================================================
+# MAIN LAYOUT
+# ======================================================================
+st.title(f"🚀 SEO Dashboard: {report_title}")
+
+# Global Metrics
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Keywords", f"{len(df_all):,}")
 col2.metric("Total Search Volume", f"{df_all['Volume'].sum():,}")
 col3.metric("Max Keyword CPC", f"${df_all['CPC'].max():.2f}")
 col4.metric("Pages Audited", len(groups_data))
 
-# --- QUESTION 1 ---
-st.markdown("<div class='question-header'>1. Which pages have the highest traffic potential?</div>", unsafe_allow_html=True)
-st.caption("Aggregated monthly search volume mapped to specific URLs.")
+st.divider()
 
-df_pages = df_all.groupby('Page URL')['Volume'].sum().reset_index().sort_values('Volume', ascending=True)
-fig1 = px.bar(df_pages, x='Volume', y='Page URL', orientation='h', color='Volume', color_continuous_scale='Blues')
-fig1.update_layout(height=400, margin=dict(l=10, r=10, t=10, b=10))
-st.plotly_chart(fig1, use_container_width=True)
+# TABS for cleaner layout
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📈 Traffic Potential", 
+    "💰 Golden Keywords", 
+    "🧊 Quick Wins", 
+    "📄 Page-by-Page View"
+])
 
-# --- QUESTION 2 ---
-st.markdown("<div class='question-header'>2. Where is the commercial intent? (The Golden Keywords)</div>", unsafe_allow_html=True)
-st.caption("Scatter plot of Volume vs. CPC. Look for points in the top right (High Traffic + High Value). Hover to see the keyword.")
+# --- TAB 1 ---
+with tab1:
+    st.subheader("Which pages have the highest traffic potential?")
+    st.caption("Aggregated monthly search volume mapped to specific URLs.")
+    df_pages = df_all.groupby('Page URL')['Volume'].sum().reset_index().sort_values('Volume', ascending=True)
+    fig1 = px.bar(df_pages, x='Volume', y='Page URL', orientation='h', color='Volume', color_continuous_scale='Blues')
+    fig1.update_layout(height=max(400, len(df_pages)*30), margin=dict(l=10, r=10, t=10, b=10))
+    st.plotly_chart(fig1, use_container_width=True)
 
-df_cpc = df_all[df_all['CPC'] > 0]
-if not df_cpc.empty:
-    fig2 = px.scatter(
-        df_cpc, x='Volume', y='CPC', hover_name='Keyword', hover_data=['Page URL'],
-        color='CPC', size='Volume', color_continuous_scale='Teal', log_x=True
-    )
-    fig2.update_layout(height=400, margin=dict(l=10, r=10, t=10, b=10), xaxis_title="Volume (Log Scale)")
-    st.plotly_chart(fig2, use_container_width=True)
-else:
-    st.info("No CPC data found to map commercial intent.")
-
-# --- QUESTION 3 ---
-st.markdown("<div class='question-header'>3. Where are the Quick Wins? (High Volume, $0 CPC)</div>", unsafe_allow_html=True)
-st.caption("These keywords drive massive traffic but have little to no commercial ad competition, making them great for informational blog posts.")
-
-df_zero = df_all[df_all['CPC'] == 0].sort_values('Volume', ascending=False).head(15)
-fig3 = px.bar(df_zero, x='Volume', y='Keyword', orientation='h', text='Page URL', color='Volume', color_continuous_scale='Greens')
-fig3.update_yaxes(autorange="reversed")
-fig3.update_layout(height=500, margin=dict(l=10, r=10, t=10, b=10))
-st.plotly_chart(fig3, use_container_width=True)
-
-# --- FOOLPROOF PAGE VIEW ---
-st.markdown("<div class='question-header'>Raw Data by Page</div>", unsafe_allow_html=True)
-st.caption("Click on any page below to view all assigned keywords.")
-
-for group in groups_data:
-    df_group = pd.DataFrame(group['keywords']).sort_values('Volume', ascending=False)
-    with st.expander(f"📄 {group['URL']} (Total Volume: {df_group['Volume'].sum():,})"):
-        st.dataframe(
-            df_group.style.format({'Volume': '{:,}', 'CPC': '${:.2f}'}),
-            use_container_width=True, hide_index=True
+# --- TAB 2 ---
+with tab2:
+    st.subheader("Where is the commercial intent? (The Golden Keywords)")
+    st.caption("High Volume + High CPC. Look for points in the top right. Hover to see the keyword.")
+    df_cpc = df_all[df_all['CPC'] > 0]
+    if not df_cpc.empty:
+        fig2 = px.scatter(
+            df_cpc, x='Volume', y='CPC', hover_name='Keyword', hover_data=['Page URL'],
+            color='CPC', size='Volume', color_continuous_scale='Teal', log_x=True
         )
+        fig2.update_layout(height=500, margin=dict(l=10, r=10, t=10, b=10), xaxis_title="Volume (Log Scale)")
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("No CPC data found to map commercial intent.")
+
+# --- TAB 3 ---
+with tab3:
+    st.subheader("Where are the Quick Wins? (High Volume, $0 CPC)")
+    st.caption("These keywords drive traffic but have no ad competition—great for informational content.")
+    df_zero = df_all[df_all['CPC'] == 0].sort_values('Volume', ascending=False).head(20)
+    fig3 = px.bar(df_zero, x='Volume', y='Keyword', orientation='h', text='Page URL', color='Volume', color_continuous_scale='Greens')
+    fig3.update_yaxes(autorange="reversed")
+    fig3.update_layout(height=600, margin=dict(l=10, r=10, t=10, b=10))
+    st.plotly_chart(fig3, use_container_width=True)
+
+# --- TAB 4 ---
+with tab4:
+    st.subheader("Raw Data by Page")
+    st.caption("Click on any page below to view all assigned keywords.")
+    
+    for group in groups_data:
+        df_group = pd.DataFrame(group['keywords']).sort_values('Volume', ascending=False)
+        with st.expander(f"🔗 {group['URL']} (Total Volume: {df_group['Volume'].sum():,})"):
+            st.dataframe(
+                df_group.style.format({'Volume': '{:,}', 'CPC': '${:.2f}'}),
+                use_container_width=True, hide_index=True
+            )
