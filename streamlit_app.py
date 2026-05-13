@@ -5,48 +5,23 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import pandas as pd
 import streamlit as st
 
 
-# ==========================================================
+# ------------------------------------------------------------
 # Page setup
-# ==========================================================
+# ------------------------------------------------------------
 st.set_page_config(
-    page_title="SEO CSV Viewer",
-    page_icon="📄",
+    page_title="SEO One-Page Report",
+    page_icon="📋",
     layout="wide",
 )
 
 
-# Tiny CSS only. No theme overrides, no broken dark/light fighting.
-st.markdown(
-    """
-    <style>
-    .small-muted { opacity: .68; font-size: .9rem; }
-    .page-title { font-size: 1.05rem; font-weight: 700; margin-bottom: .15rem; }
-    .url-pill {
-        display: inline-block;
-        padding: .18rem .5rem;
-        border: 1px solid rgba(128,128,128,.28);
-        border-radius: 999px;
-        font-size: .82rem;
-        opacity: .85;
-        margin: .15rem 0 .45rem 0;
-    }
-    .label { font-size: .78rem; opacity: .62; text-transform: uppercase; letter-spacing: .04em; }
-    .text-line { margin-bottom: .45rem; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# ==========================================================
-# Helpers
-# ==========================================================
+# ------------------------------------------------------------
+# Small helpers
+# ------------------------------------------------------------
 def clean_cell(value: Any) -> str:
-    """Clean cells exported as =\"123\" or =\"\" while preserving normal text."""
     if value is None:
         return ""
     s = str(value).strip()
@@ -54,6 +29,10 @@ def clean_cell(value: Any) -> str:
         s = s[2:-1]
     s = s.replace("&amp;", "&")
     return s.strip()
+
+
+def safe(value: Any) -> str:
+    return html.escape(clean_cell(value))
 
 
 def to_int(value: Any) -> int:
@@ -74,22 +53,53 @@ def to_float(value: Any) -> float:
         return 0.0
 
 
-def safe_text(value: Any) -> str:
-    return html.escape(clean_cell(value))
+def pretty_int(value: Any) -> str:
+    return f"{to_int(value):,}"
 
 
+def pretty_money(value: Any) -> str:
+    return f"${to_float(value):.2f}"
+
+
+def is_numberish(value: Any) -> bool:
+    s = clean_cell(value)
+    return bool(re.fullmatch(r"[0-9,.\-$]+", s)) if s else False
+
+
+def yes_no(value: Any) -> str:
+    s = clean_cell(value).lower()
+    if not s or s in {"-", "0", "no", "false", "n"}:
+        return "—"
+    return "✓"
+
+
+def metric_class(current: int, limit: int) -> str:
+    if current == 0:
+        return "muted"
+    if current > limit:
+        return "bad"
+    if current >= int(limit * 0.55):
+        return "good"
+    return "muted"
+
+
+# ------------------------------------------------------------
+# Parser
+# ------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def parse_audit_csv_bytes(file_bytes: bytes) -> Tuple[Dict[str, str], List[Dict[str, Any]]]:
+def parse_grouped_csv(file_bytes: bytes) -> Tuple[Dict[str, str], List[Dict[str, Any]]]:
     """
-    Parse the grouped SEO audit CSV format:
+    Parses the grouped SEO CSV layout:
 
     Project Name,...
     Total Groups,...
 
     Group,Title,URL,DESC,H1,
-    <group row>
-    Keyword,Volume,CPC,inTITLE,inURL,<keyword-count>,
+    <page row>
+    Keyword,Volume,CPC,inTITLE,inURL,<count>
     <keyword rows>
+
+    It also supports extra keyword columns if future exports include them.
     """
     text = file_bytes.decode("utf-8-sig", errors="replace")
     rows = list(csv.reader(io.StringIO(text)))
@@ -106,312 +116,387 @@ def parse_audit_csv_bytes(file_bytes: bytes) -> Tuple[Dict[str, str], List[Dict[
 
         first = clean_cell(row[0])
 
-        # Top metadata rows before the grouped report starts.
-        if first != "Group" and len(row) > 1 and first and first != "Keyword":
+        # Metadata before grouped sections.
+        if first not in {"Group", "Keyword"} and len(row) > 1:
             metadata[first] = clean_cell(row[1])
             i += 1
             continue
 
-        if first == "Group":
-            headers = [clean_cell(c) for c in row]
-            page_row = rows[i + 1] if i + 1 < len(rows) else []
-
-            group = {
-                "group": clean_cell(page_row[0]) if len(page_row) > 0 else "",
-                "title": clean_cell(page_row[1]) if len(page_row) > 1 else "",
-                "url": clean_cell(page_row[2]) if len(page_row) > 2 else "",
-                "description": clean_cell(page_row[3]) if len(page_row) > 3 else "",
-                "h1": clean_cell(page_row[4]) if len(page_row) > 4 else "",
-                "keyword_count_from_file": None,
-                "keywords": [],
-                "raw_group_headers": headers,
-            }
-
-            i += 2
-
-            # Find the keyword header for this group.
-            while i < len(rows):
-                r = rows[i]
-                if r and clean_cell(r[0]) == "Keyword":
-                    if len(r) > 5 and clean_cell(r[5]).isdigit():
-                        group["keyword_count_from_file"] = int(clean_cell(r[5]))
-                    i += 1
-                    break
-                if r and clean_cell(r[0]) == "Group":
-                    break
-                i += 1
-
-            # Read keyword rows until the next group.
-            while i < len(rows):
-                r = rows[i]
-                if r and clean_cell(r[0]) == "Group":
-                    break
-                if r and any(clean_cell(c) for c in r):
-                    kw = {
-                        "Keyword": clean_cell(r[0]) if len(r) > 0 else "",
-                        "Volume": to_int(r[1]) if len(r) > 1 else 0,
-                        "CPC": to_float(r[2]) if len(r) > 2 else 0.0,
-                        "inTITLE": clean_cell(r[3]) if len(r) > 3 else "",
-                        "inURL": clean_cell(r[4]) if len(r) > 4 else "",
-                    }
-                    if kw["Keyword"]:
-                        group["keywords"].append(kw)
-                i += 1
-
-            groups.append(group)
+        if first != "Group":
+            i += 1
             continue
 
-        i += 1
+        group_header = [clean_cell(c) for c in row]
+        page_row = rows[i + 1] if i + 1 < len(rows) else []
+
+        page_data: Dict[str, str] = {}
+        for col_index, header in enumerate(group_header):
+            if not header:
+                continue
+            page_data[header] = clean_cell(page_row[col_index]) if col_index < len(page_row) else ""
+
+        group = {
+            "group": page_data.get("Group", ""),
+            "title": page_data.get("Title", ""),
+            "url": page_data.get("URL", ""),
+            "description": page_data.get("DESC", page_data.get("Description", "")),
+            "h1": page_data.get("H1", ""),
+            "page_data": page_data,
+            "keyword_headers": [],
+            "keyword_count_from_file": None,
+            "keywords": [],
+        }
+
+        i += 2
+
+        # Find the keyword header row.
+        while i < len(rows):
+            r = rows[i]
+            if r and clean_cell(r[0]) == "Keyword":
+                raw_headers = [clean_cell(c) for c in r]
+                headers: List[str] = []
+                for h in raw_headers:
+                    # Some exports put a keyword count as the final cell of the header row.
+                    if h and not h.isdigit():
+                        headers.append(h)
+                    elif h.isdigit():
+                        group["keyword_count_from_file"] = int(h)
+                group["keyword_headers"] = headers
+                i += 1
+                break
+            if r and clean_cell(r[0]) == "Group":
+                break
+            i += 1
+
+        headers = group["keyword_headers"] or ["Keyword", "Volume", "CPC", "inTITLE", "inURL"]
+
+        # Read keywords until next group.
+        while i < len(rows):
+            r = rows[i]
+            if r and clean_cell(r[0]) == "Group":
+                break
+            if r and any(clean_cell(c) for c in r):
+                kw: Dict[str, Any] = {}
+                for col_index, header in enumerate(headers):
+                    kw[header] = clean_cell(r[col_index]) if col_index < len(r) else ""
+
+                if clean_cell(kw.get("Keyword", "")):
+                    kw["Volume_num"] = to_int(kw.get("Volume", 0))
+                    kw["CPC_num"] = to_float(kw.get("CPC", 0))
+                    group["keywords"].append(kw)
+            i += 1
+
+        groups.append(group)
 
     return metadata, groups
 
 
-def group_to_keywords_df(groups: List[Dict[str, Any]]) -> pd.DataFrame:
-    rows: List[Dict[str, Any]] = []
-    for idx, group in enumerate(groups, start=1):
-        for kw in group["keywords"]:
-            rows.append(
-                {
-                    "Page #": idx,
-                    "Group": group["group"],
-                    "Title": group["title"],
-                    "URL": group["url"],
-                    "Keyword": kw["Keyword"],
-                    "Volume": kw["Volume"],
-                    "CPC": kw["CPC"],
-                    "inTITLE": kw["inTITLE"],
-                    "inURL": kw["inURL"],
-                }
-            )
-    return pd.DataFrame(rows)
-
-
-def page_summary_df(groups: List[Dict[str, Any]]) -> pd.DataFrame:
-    rows: List[Dict[str, Any]] = []
-    for idx, group in enumerate(groups, start=1):
-        kws = group["keywords"]
-        total_volume = sum(k["Volume"] for k in kws)
-        top_keyword = max(kws, key=lambda k: k["Volume"], default={"Keyword": "", "Volume": 0})
-        rows.append(
-            {
-                "#": idx,
-                "Group": group["group"],
-                "URL": group["url"],
-                "Keywords": len(kws),
-                "Total Volume": total_volume,
-                "Top Keyword": top_keyword.get("Keyword", ""),
-                "Top Keyword Volume": top_keyword.get("Volume", 0),
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def load_local_csv_bytes(folder: str, filename: str) -> bytes:
-    path = Path(folder).expanduser().resolve() / filename
-    return path.read_bytes()
-
-
-def find_csv_files(folder: str, include_subfolders: bool) -> List[str]:
-    root = Path(folder).expanduser()
-    if not root.exists() or not root.is_dir():
-        return []
-    pattern = "**/*.csv" if include_subfolders else "*.csv"
-    files = sorted(root.glob(pattern), key=lambda p: str(p).lower())
-    return [str(p.relative_to(root)) for p in files]
-
-
-def render_text_field(label: str, value: str) -> None:
-    st.markdown(
-        f"<div class='label'>{html.escape(label)}</div>"
-        f"<div class='text-line'>{safe_text(value) or '—'}</div>",
-        unsafe_allow_html=True,
+# ------------------------------------------------------------
+# Load CSV
+# ------------------------------------------------------------
+def get_csv_bytes() -> Tuple[bytes | None, str]:
+    st.sidebar.header("CSV file")
+    source = st.sidebar.radio(
+        "Choose source",
+        ["Upload CSV", "Open CSV from local folder"],
+        label_visibility="collapsed",
     )
 
+    if source == "Upload CSV":
+        uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+        if not uploaded:
+            return None, ""
+        return uploaded.getvalue(), uploaded.name
 
-def render_group_card(group: Dict[str, Any], number: int, rows_to_show: int, sort_keywords: str) -> None:
-    keywords = pd.DataFrame(group["keywords"])
-    if not keywords.empty:
-        if sort_keywords == "Highest volume first":
-            keywords = keywords.sort_values("Volume", ascending=False)
-        elif sort_keywords == "Highest CPC first":
-            keywords = keywords.sort_values("CPC", ascending=False)
-        keywords = keywords.head(rows_to_show)
-
-    with st.container(border=True):
-        title = group["group"] or group["title"] or f"Page {number}"
-        st.markdown(f"<div class='page-title'>{number}. {safe_text(title)}</div>", unsafe_allow_html=True)
-        st.markdown(f"<span class='url-pill'>{safe_text(group['url']) or 'No URL'}</span>", unsafe_allow_html=True)
-
-        left, right = st.columns([2, 1])
-        with left:
-            render_text_field("Title", group["title"])
-            render_text_field("H1", group["h1"])
-            render_text_field("Description", group["description"])
-        with right:
-            st.metric("Keywords", f"{len(group['keywords']):,}")
-            st.metric("Total Volume", f"{sum(k['Volume'] for k in group['keywords']):,}")
-            if group.get("keyword_count_from_file") is not None:
-                st.caption(f"Keyword count in file header: {group['keyword_count_from_file']:,}")
-
-        st.dataframe(
-            keywords,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Volume": st.column_config.NumberColumn("Volume", format="%d"),
-                "CPC": st.column_config.NumberColumn("CPC", format="$%.2f"),
-            },
-        )
-
-
-# ==========================================================
-# Sidebar: CSV source
-# ==========================================================
-st.sidebar.title("CSV file")
-source = st.sidebar.radio("Choose source", ["Upload CSV", "Open CSV from local folder"], horizontal=False)
-
-file_bytes = None
-source_name = None
-
-if source == "Upload CSV":
-    uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"])
-    if uploaded is not None:
-        file_bytes = uploaded.getvalue()
-        source_name = uploaded.name
-else:
-    folder = st.sidebar.text_input("Folder path", value=str(Path.cwd()))
+    folder = st.sidebar.text_input("Folder path", value=".")
     include_subfolders = st.sidebar.checkbox("Include subfolders", value=False)
-    csv_files = find_csv_files(folder, include_subfolders)
-    if not csv_files:
-        st.sidebar.info("No CSV files found in that folder.")
-    else:
-        selected_file = st.sidebar.selectbox("Select CSV", csv_files)
-        if selected_file:
-            try:
-                file_bytes = load_local_csv_bytes(folder, selected_file)
-                source_name = selected_file
-            except Exception as exc:
-                st.sidebar.error(f"Could not open file: {exc}")
+
+    folder_path = Path(folder).expanduser()
+    if not folder_path.exists() or not folder_path.is_dir():
+        st.sidebar.error("Folder not found.")
+        return None, ""
+
+    pattern = "**/*.csv" if include_subfolders else "*.csv"
+    files = sorted(folder_path.glob(pattern), key=lambda p: str(p).lower())
+    if not files:
+        st.sidebar.warning("No CSV files found in that folder.")
+        return None, ""
+
+    labels = [str(p.relative_to(folder_path)) for p in files]
+    selected_label = st.sidebar.selectbox("CSV file", labels)
+    selected_path = files[labels.index(selected_label)]
+
+    try:
+        return selected_path.read_bytes(), selected_path.name
+    except Exception as exc:
+        st.sidebar.error(f"Could not read file: {exc}")
+        return None, ""
 
 
-# ==========================================================
-# Main app
-# ==========================================================
-st.title("SEO CSV Viewer")
-st.caption("A clean view of the data in your SEO audit CSV. No extra scoring, no invented recommendations.")
+# ------------------------------------------------------------
+# Filtering and rendering
+# ------------------------------------------------------------
+def keyword_passes_filters(kw: Dict[str, Any], hide_zero_cpc: bool, hide_under_50: bool) -> bool:
+    if hide_zero_cpc and to_float(kw.get("CPC", kw.get("CPC_num", 0))) <= 0:
+        return False
+    if hide_under_50 and to_int(kw.get("Volume", kw.get("Volume_num", 0))) < 50:
+        return False
+    return True
 
-if file_bytes is None:
-    st.info("Upload a CSV or choose one from a local folder to begin.")
+
+def render_length_box(label: str, current: int, limit: int) -> str:
+    klass = metric_class(current, limit)
+    return f"""
+        <div class=\"mini-stat {klass}\">
+            <span class=\"mini-label\">{label}</span>
+            <strong>{current}/{limit}</strong>
+        </div>
+    """
+
+
+def render_keyword_table(group: Dict[str, Any], keywords: List[Dict[str, Any]]) -> str:
+    available_headers = group.get("keyword_headers") or ["Keyword", "Volume", "CPC", "inTITLE", "inURL"]
+    preferred = ["Keyword", "Volume", "CPC", "inTITLE", "inURL", "TR", "UR", "Rank"]
+
+    columns: List[str] = [c for c in preferred if c in available_headers]
+    for c in available_headers:
+        if c not in columns and c and not c.isdigit():
+            columns.append(c)
+
+    if not columns:
+        columns = ["Keyword", "Volume", "CPC"]
+
+    header_cells = "".join(f"<th>{safe(c)}</th>" for c in columns)
+
+    if not keywords:
+        return f"""
+            <table class=\"kw-table\">
+                <thead><tr>{header_cells}</tr></thead>
+                <tbody><tr><td colspan=\"{len(columns)}\" class=\"empty-row\">No keywords match the current filters.</td></tr></tbody>
+            </table>
+        """
+
+    rows_html = []
+    for kw in keywords:
+        cells = []
+        for col in columns:
+            raw = kw.get(col, "")
+            col_lower = col.lower()
+            if col_lower == "volume":
+                cells.append(f"<td class=\"num volume\">{pretty_int(raw)}</td>")
+            elif col_lower == "cpc":
+                cpc = to_float(raw)
+                cpc_class = "cpc-zero" if cpc <= 0 else "cpc-positive"
+                cells.append(f"<td class=\"num {cpc_class}\">{pretty_money(raw)}</td>")
+            elif col_lower in {"intitle", "inurl"}:
+                cells.append(f"<td class=\"center\">{yes_no(raw)}</td>")
+            elif col_lower in {"rank", "tr", "ur"} and is_numberish(raw):
+                cells.append(f"<td class=\"num\">{safe(raw)}</td>")
+            else:
+                cells.append(f"<td>{safe(raw)}</td>")
+        rows_html.append("<tr>" + "".join(cells) + "</tr>")
+
+    return f"""
+        <table class=\"kw-table\">
+            <thead><tr>{header_cells}</tr></thead>
+            <tbody>{''.join(rows_html)}</tbody>
+        </table>
+    """
+
+
+def render_card(index: int, group: Dict[str, Any], keywords: List[Dict[str, Any]]) -> str:
+    group_name = group.get("group", "") or group.get("title", "") or group.get("url", "") or f"Page {index}"
+    title = group.get("title", "")
+    url = group.get("url", "")
+    desc = group.get("description", "")
+    h1 = group.get("h1", "")
+
+    title_len = len(clean_cell(title))
+    desc_len = len(clean_cell(desc))
+    keyword_count = len(keywords)
+    total_volume = sum(to_int(k.get("Volume", k.get("Volume_num", 0))) for k in keywords)
+
+    table_html = render_keyword_table(group, keywords)
+
+    return f"""
+    <section class=\"report-card\">
+        <div class=\"card-top\">
+            <div class=\"card-title\">
+                <span class=\"fake-check\"></span>
+                <span>{index}. {safe(group_name)}</span>
+            </div>
+            <div class=\"fake-actions\" aria-hidden=\"true\">
+                <span>⚙</span><span>▣</span><span>👁</span><span>☁</span><span>⌘</span>
+            </div>
+        </div>
+
+        <div class=\"page-panel\">
+            <div class=\"h1-row\">
+                <span class=\"h1-badge\">H1</span>
+                <span class=\"h1-text\">{safe(h1) if h1 else '—'}</span>
+                <span class=\"connect-pill\">CONNECT GROUP⌄</span>
+            </div>
+
+            <div class=\"body-grid\">
+                <div class=\"snippet-box\">
+                    <div class=\"url-line\">{safe(url) if url else 'No URL in file'}</div>
+                    <h3>{safe(title) if title else 'No title in file'}</h3>
+                    <p>{safe(desc) if desc else 'No meta description in file'}</p>
+                </div>
+
+                <div class=\"meta-box\">
+                    <div class=\"meta-label\">Meta Title Length</div>
+                    <div class=\"stat-row\">
+                        {render_length_box('Desktop', title_len, 70)}
+                        {render_length_box('Mobile', title_len, 78)}
+                    </div>
+                    <div class=\"meta-label second\">Meta Description Length</div>
+                    <div class=\"stat-row\">
+                        {render_length_box('Desktop', desc_len, 300)}
+                        {render_length_box('Mobile', desc_len, 120)}
+                    </div>
+                    <div class=\"tiny-summary\">{keyword_count:,} keywords · {total_volume:,} searches/mo</div>
+                </div>
+            </div>
+        </div>
+
+        <div class=\"table-wrap\">
+            {table_html}
+        </div>
+    </section>
+    """
+
+
+def render_report(metadata: Dict[str, str], groups: List[Dict[str, Any]], filtered_groups: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]], file_name: str) -> None:
+    total_pages = len(groups)
+    total_keywords_raw = sum(len(g.get("keywords", [])) for g in groups)
+    total_keywords_filtered = sum(len(kws) for _, kws in filtered_groups)
+    total_volume_filtered = sum(to_int(k.get("Volume", k.get("Volume_num", 0))) for _, kws in filtered_groups for k in kws)
+
+    project = metadata.get("Project Name", "SEO CSV Report")
+    project = project.replace("AUDIT  - ", "")
+
+    css = """
+    <style>
+        .block-container { padding-top: 1.4rem; padding-bottom: 3rem; max-width: 1900px; }
+        .report-shell { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #102033; }
+        .report-hero { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; margin: 0 0 22px 0; }
+        .report-hero h1 { margin: 0; font-size: 30px; line-height: 1.15; color:#102033; letter-spacing:-.03em; }
+        .report-hero .sub { margin-top: 6px; color:#66758a; font-size: 14px; }
+        .summary-pills { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+        .summary-pill { background:#ffffff; border:1px solid #dce5ef; border-radius:999px; padding:9px 13px; box-shadow:0 1px 5px rgba(15, 35, 60, .05); font-size:13px; color:#506176; }
+        .summary-pill strong { color:#173f66; }
+        .report-grid { column-count: 2; column-gap: 28px; }
+        .report-card { break-inside: avoid; display:inline-block; width:100%; margin:0 0 28px; background:#ffffff; border:1px solid #d8e4f0; border-radius:13px; overflow:hidden; box-shadow:0 10px 28px rgba(22, 55, 88, .08); }
+        .card-top { background:#1f4f7e; color:#fff; padding:13px 18px; display:flex; align-items:center; justify-content:space-between; gap:16px; }
+        .card-title { display:flex; align-items:center; gap:12px; font-weight:800; font-size:16px; line-height:1.2; }
+        .fake-check { width:20px; height:20px; border-radius:5px; background:#fff; box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); flex:0 0 auto; }
+        .fake-actions { display:flex; gap:7px; white-space:nowrap; }
+        .fake-actions span { width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; background:#173f66; color:#fff; font-size:12px; border:1px solid rgba(255,255,255,.2); }
+        .page-panel { background:#1f4f7e; padding:0 9px 10px; }
+        .h1-row { display:grid; grid-template-columns: 44px 1fr 185px; gap:9px; align-items:center; margin-bottom:9px; }
+        .h1-badge { background:#1f4f7e; color:#fff; border-radius:7px; height:38px; display:flex; align-items:center; justify-content:center; font-weight:800; border:1px solid rgba(255,255,255,.35); }
+        .h1-text, .connect-pill { background:#fff; color:#263749; min-height:38px; border-radius:9px; display:flex; align-items:center; padding:0 14px; font-weight:700; border:1px solid #d9e4ef; overflow:hidden; text-overflow:ellipsis; }
+        .connect-pill { justify-content:center; color:#8796a6; font-weight:800; letter-spacing:.02em; }
+        .body-grid { display:grid; grid-template-columns: 1fr 205px; gap:9px; align-items:stretch; }
+        .snippet-box, .meta-box { background:#fff; border-radius:9px; border:1px solid #d9e4ef; }
+        .snippet-box { padding:15px 18px; min-height:126px; }
+        .url-line { color:#6e7e91; font-size:12px; margin-bottom:9px; word-break:break-word; }
+        .snippet-box h3 { margin:0 0 6px; color:#1f4f7e; font-size:17px; line-height:1.25; }
+        .snippet-box p { margin:0; color:#1a2938; font-size:13px; line-height:1.45; }
+        .meta-box { padding:13px; }
+        .meta-label { color:#69798d; font-size:12px; margin-bottom:7px; }
+        .meta-label.second { margin-top:12px; }
+        .stat-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+        .mini-stat { background:#1f4f7e; color:#fff; border-radius:9px; padding:8px 9px; text-align:center; }
+        .mini-stat.bad { background:#d8485e; }
+        .mini-stat.good { background:#1f4f7e; }
+        .mini-stat.muted { background:#5f7893; }
+        .mini-label { display:block; font-size:10px; opacity:.8; margin-bottom:2px; }
+        .mini-stat strong { font-size:13px; }
+        .tiny-summary { margin-top:12px; padding-top:10px; border-top:1px solid #e7edf3; color:#68798d; font-size:12px; }
+        .table-wrap { padding:12px 10px 14px; background:#fff; }
+        .kw-table { width:100%; border-collapse:separate; border-spacing:0; font-size:13px; color:#203243; overflow:hidden; border-radius:9px; }
+        .kw-table thead th { background:#1f4f7e; color:#fff; padding:11px 12px; text-align:left; font-weight:800; white-space:nowrap; }
+        .kw-table thead th:first-child { border-top-left-radius:9px; }
+        .kw-table thead th:last-child { border-top-right-radius:9px; }
+        .kw-table tbody td { padding:10px 12px; border-bottom:1px solid #e8eef5; vertical-align:middle; }
+        .kw-table tbody tr:nth-child(odd) td { background:#ffffff; }
+        .kw-table tbody tr:nth-child(even) td { background:#f7f9fc; }
+        .kw-table tbody tr:hover td { background:#edf5ff; }
+        .kw-table .num { text-align:right; white-space:nowrap; font-variant-numeric: tabular-nums; }
+        .kw-table .center { text-align:center; color:#66758a; }
+        .kw-table .volume { color:#22a467; font-weight:800; }
+        .kw-table .cpc-zero { color:#e04f5f; font-weight:800; }
+        .kw-table .cpc-positive { color:#f28b24; font-weight:800; }
+        .empty-row { text-align:center; color:#75859a; padding:22px !important; }
+        @media (max-width: 1200px) {
+            .report-grid { column-count: 1; }
+            .report-hero { align-items:flex-start; flex-direction:column; }
+            .summary-pills { justify-content:flex-start; }
+        }
+        @media (max-width: 760px) {
+            .h1-row, .body-grid { grid-template-columns: 1fr; }
+            .connect-pill { min-height:38px; }
+            .fake-actions { display:none; }
+            .table-wrap { overflow-x:auto; }
+        }
+    </style>
+    """
+
+    cards = "".join(render_card(i, group, kws) for i, (group, kws) in enumerate(filtered_groups, start=1))
+
+    html_report = f"""
+    {css}
+    <div class=\"report-shell\">
+        <div class=\"report-hero\">
+            <div>
+                <h1>SEO CSV Report</h1>
+                <div class=\"sub\">{safe(project)} · {safe(file_name)}</div>
+            </div>
+            <div class=\"summary-pills\">
+                <div class=\"summary-pill\"><strong>{total_pages:,}</strong> pages</div>
+                <div class=\"summary-pill\"><strong>{total_keywords_filtered:,}</strong> keywords shown</div>
+                <div class=\"summary-pill\"><strong>{total_keywords_raw:,}</strong> keywords in file</div>
+                <div class=\"summary-pill\"><strong>{total_volume_filtered:,}</strong> searches/mo shown</div>
+            </div>
+        </div>
+        <main class=\"report-grid\">{cards}</main>
+    </div>
+    """
+
+    st.markdown(html_report, unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------
+# App
+# ------------------------------------------------------------
+csv_bytes, file_name = get_csv_bytes()
+
+st.sidebar.header("Filters")
+hide_zero_cpc = st.sidebar.checkbox("Hide CPC = $0", value=False)
+hide_under_50 = st.sidebar.checkbox("Hide searches under 50/mo", value=False)
+
+if not csv_bytes:
+    st.info("Choose a CSV file to view the one-page report.")
     st.stop()
 
 try:
-    metadata, groups = parse_audit_csv_bytes(file_bytes)
+    metadata, groups = parse_grouped_csv(csv_bytes)
 except Exception as exc:
     st.error(f"Could not parse this CSV: {exc}")
     st.stop()
 
 if not groups:
-    st.warning("No grouped SEO data was found in this CSV.")
+    st.warning("No page groups were found in this CSV.")
     st.stop()
 
-all_keywords = group_to_keywords_df(groups)
-pages = page_summary_df(groups)
+filtered_groups: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
+for group in groups:
+    keywords = [
+        kw for kw in group.get("keywords", [])
+        if keyword_passes_filters(kw, hide_zero_cpc=hide_zero_cpc, hide_under_50=hide_under_50)
+    ]
+    filtered_groups.append((group, keywords))
 
-# Header summary
-st.subheader(source_name or "Loaded CSV")
-if metadata:
-    meta_text = "  ·  ".join(f"{k}: {v}" for k, v in metadata.items() if v)
-    if meta_text:
-        st.caption(meta_text)
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Pages", f"{len(groups):,}")
-c2.metric("Keywords", f"{len(all_keywords):,}")
-c3.metric("Total Volume", f"{int(all_keywords['Volume'].sum()):,}" if not all_keywords.empty else "0")
-c4.metric("Avg CPC", f"${all_keywords['CPC'].mean():.2f}" if not all_keywords.empty else "$0.00")
-
-st.divider()
-
-# Simple controls
-left, middle, right = st.columns([2, 1, 1])
-with left:
-    search = st.text_input("Search keyword, page, URL, title, H1, or description", value="")
-with middle:
-    sort_pages = st.selectbox("Sort pages", ["CSV order", "Highest total volume", "Most keywords"], index=0)
-with right:
-    rows_to_show = st.number_input("Rows per page", min_value=5, max_value=200, value=20, step=5)
-
-sort_keywords = st.radio(
-    "Keyword order inside each page",
-    ["CSV order", "Highest volume first", "Highest CPC first"],
-    horizontal=True,
-)
-
-# Filter groups by search text.
-visible_groups = groups
-if search.strip():
-    q = search.strip().lower()
-    filtered = []
-    for g in groups:
-        haystack = " ".join(
-            [
-                g.get("group", ""),
-                g.get("title", ""),
-                g.get("url", ""),
-                g.get("description", ""),
-                g.get("h1", ""),
-                " ".join(k.get("Keyword", "") for k in g.get("keywords", [])),
-            ]
-        ).lower()
-        if q in haystack:
-            filtered.append(g)
-    visible_groups = filtered
-
-if sort_pages == "Highest total volume":
-    visible_groups = sorted(visible_groups, key=lambda g: sum(k["Volume"] for k in g["keywords"]), reverse=True)
-elif sort_pages == "Most keywords":
-    visible_groups = sorted(visible_groups, key=lambda g: len(g["keywords"]), reverse=True)
-
-# Overview table: actual CSV groups summarized.
-st.subheader("Pages in this file")
-st.dataframe(
-    pages,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "Total Volume": st.column_config.NumberColumn("Total Volume", format="%d"),
-        "Top Keyword Volume": st.column_config.NumberColumn("Top Keyword Volume", format="%d"),
-    },
-)
-
-st.divider()
-
-st.subheader("Page details")
-if not visible_groups:
-    st.warning("No pages match your search.")
-else:
-    for idx, group in enumerate(visible_groups, start=1):
-        original_number = groups.index(group) + 1
-        render_group_card(group, original_number, int(rows_to_show), sort_keywords)
-
-with st.expander("All keywords as one table"):
-    keyword_view = all_keywords.copy()
-    if search.strip():
-        q = search.strip().lower()
-        mask = keyword_view.astype(str).apply(lambda col: col.str.lower().str.contains(q, na=False)).any(axis=1)
-        keyword_view = keyword_view[mask]
-    st.dataframe(
-        keyword_view,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Volume": st.column_config.NumberColumn("Volume", format="%d"),
-            "CPC": st.column_config.NumberColumn("CPC", format="$%.2f"),
-        },
-    )
-    st.download_button(
-        "Download visible keywords as CSV",
-        data=keyword_view.to_csv(index=False).encode("utf-8"),
-        file_name="seo_keywords_view.csv",
-        mime="text/csv",
-    )
+render_report(metadata, groups, filtered_groups, file_name)
